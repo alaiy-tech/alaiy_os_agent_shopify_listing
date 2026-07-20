@@ -1,0 +1,98 @@
+{
+ "type": "object",
+ "additionalProperties": false,
+ "properties": {
+  "category": {
+   "type": "string",
+   "enum": ["Jewelry", "Watches", "Accessories"],
+   "description": "The detected product category. Drives which attributes are mandatory."
+  },
+  "brand": {
+   "type": "string",
+   "description": "Brand / maker (e.g. 'Roberto Coin'). Reuse an existing brand from get_reference_values when it matches; empty string if unknown."
+  },
+  "title": {
+   "type": "string",
+   "description": "Product title in Solist house style: Brand + Product Type + key spec (e.g. 'Roberto Coin Obelisco 18K Yellow Gold Diamond Bracelet'). Include the supplier reference/model number at the end if present."
+  },
+  "description": {
+   "type": "string",
+   "description": "Editorial product description, 2-4 short paragraphs of plain text (no HTML, no markdown). Luxury tone matching The Solist: evocative but factual. Never invent specifications not supported by the data or images."
+  },
+  "bullet_points": {
+   "type": "array",
+   "items": { "type": "string" },
+   "minItems": 3,
+   "description": "3-8 concise selling-point / spec bullets (plain text, no leading symbol). Each states one concrete detail a shopper cares about."
+  },
+  "seo_title": {
+   "type": "string",
+   "description": "SEO page title, <= 70 characters, front-loaded with brand + product type."
+  },
+  "seo_description": {
+   "type": "string",
+   "description": "SEO meta description, <= 160 characters, compelling and keyword-rich."
+  },
+  "seo_keywords": {
+   "type": "array",
+   "items": { "type": "string" },
+   "description": "5-15 SEO keywords / search phrases relevant to this product."
+  },
+  "shopify_tags": {
+   "type": "array",
+   "items": { "type": "string" },
+   "description": "Shopify tags for filtering/merchandising. Reuse existing tags from get_reference_values where they apply; cover category, type, brand, material, gemstone, collection, gender as relevant."
+  },
+  "shopify_category": {
+   "type": "string",
+   "description": "Suggested Shopify Standard Product Taxonomy category name (e.g. 'Apparel & Accessories > Jewelry > Bracelets'). Empty string if unsure."
+  },
+  "attributes": {
+   "type": "object",
+   "additionalProperties": false,
+   "description": "Structured attributes. Fill every field you can confidently determine from the description and photos for the detected category; omit or leave empty the ones that do not apply or cannot be determined (and list those you would expect but cannot fill in needs_review). Respect units: dimensions >1in in inches else mm; weight in grams; case size in mm; water resistance in metres.",
+   "properties": {
+    "material": { "type": "string", "description": "e.g. '18K Yellow Gold', 'Stainless Steel'." },
+    "color": { "type": "string" },
+    "features": { "type": "string", "description": "Notable features, comma-separated." },
+    "dimensions": { "type": "string", "description": ">1 inch in inches, <1 inch in mm." },
+    "measurement": { "type": "string", "description": "e.g. 'Length: 7\"; Width: 15mm'." },
+    "weight": { "type": "string", "description": "In grams, e.g. '44 g' (suitcases in pounds)." },
+    "size": { "type": "string", "description": "Ring size etc. — millimetres for ring size." },
+    "style": { "type": "string", "description": "Style classification, e.g. 'Link', 'Tennis'." },
+    "manufactured_in": { "type": "string", "description": "Country of origin." },
+    "brand_packaging": { "type": "string", "description": "Original box/pouch supplied? e.g. 'Pouch', 'Full set'." },
+    "papers": { "type": "string", "description": "Authentication papers / certificates: 'Yes'/'No' or description." },
+    "backstory": { "type": "string", "description": "Short condition/provenance narrative, e.g. 'Pristine Display — Handled, Never Owned'." },
+    "clasp_type": { "type": "string", "description": "Jewelry." },
+    "back_type": { "type": "string", "description": "Jewelry (e.g. earring back)." },
+    "gemstones": { "type": "string", "description": "Jewelry. Format: 'Diamond 1.68 ct. tw.'." },
+    "color_and_clarity": { "type": "string", "description": "Jewelry gemstone quality, e.g. 'Color: G-H; Clarity: VS-SI1'." },
+    "nib_size": { "type": "string", "description": "Writing instruments." },
+    "movement": { "type": "string", "description": "Watches, e.g. 'Automatic', 'Quartz'." },
+    "case_size": { "type": "string", "description": "Watches, in mm." },
+    "dial_color": { "type": "string", "description": "Watches." },
+    "water_resistance": { "type": "string", "description": "Watches, in metres." },
+    "case_back": { "type": "string", "description": "Watches, e.g. 'Solid', 'Exhibition'." },
+    "strap": { "type": "string", "description": "Watches, e.g. 'Leather', 'Steel Bracelet'." },
+    "complications": { "type": "string", "description": "Watches, e.g. 'Date, Chronograph'." }
+   }
+  },
+  "needs_review": {
+   "type": "array",
+   "items": { "type": "string" },
+   "description": "Human-readable names of mandatory-for-category fields that could NOT be confidently filled and must be completed by the admin before publish (e.g. 'Water Resistance', 'Papers')."
+  },
+  "confidence": {
+   "type": "string",
+   "enum": ["high", "medium", "low"],
+   "description": "Overall confidence in the enrichment given the quality of the source data and images."
+  },
+  "notes": {
+   "type": "array",
+   "items": { "type": "string" },
+   "description": "Anything the admin should know: assumptions made, ambiguities, or data conflicts between the text and the photos."
+  }
+ },
+ "required": ["category", "title", "description", "bullet_points", "attributes", "needs_review", "confidence"]
+}

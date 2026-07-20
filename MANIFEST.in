@@ -1,0 +1,2 @@
+include *.md
+recursive-include alaiy_os_agent_listing *.json *.js *.css *.html *.svg *.png *.txt *.md
