@@ -80,7 +80,7 @@
   },
   "images": {
    "type": "array",
-   "description": "Generated editorial shots, one per generate_image call, in the order: hero, detail, angle, lifestyle, scale. Copy each tool result's {kind, brief, url} verbatim. Empty if item_code was unavailable or generation failed — note that in needs_review/notes instead of blocking the rest of the listing.",
+   "description": "Generated editorial shots from generate_product_images, in the order: hero, detail, angle, lifestyle, scale. Copy the tool result's {kind, brief, url} entries verbatim. Empty if no product evidence was available at all; individual entries may have url=null if image generation wasn't configured — note that in needs_review/notes instead of blocking the rest of the listing.",
    "maxItems": 5,
    "items": {
     "type": "object",
@@ -93,11 +93,11 @@
      },
      "brief": {
       "type": "string",
-      "description": "The exact prompt passed to generate_image for this shot."
+      "description": "The exact prompt passed to generate_product_images for this shot."
      },
      "url": {
-      "type": "string",
-      "description": "The file url returned by generate_image for this shot."
+      "type": ["string", "null"],
+      "description": "The file url returned for this shot, or null if it could not be generated."
      }
     },
     "required": ["kind", "brief", "url"]

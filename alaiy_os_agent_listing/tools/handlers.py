@@ -37,11 +37,19 @@ _MEDIA_TYPES = {
 	".gif": "image/gif",
 	".webp": "image/webp",
 }
+_MEDIA_TYPES_BY_MIME = {v: k for k, v in _MEDIA_TYPES.items()}
 
 # Cap how many photos we send to keep token/latency cost bounded.
 _MAX_IMAGES = 5
 
-# Image generation goes through OpenRouter's OpenAI-compatible API.
+# Some product-photo CDNs block requests with no browser-like User-Agent
+# (confirmed: Anthropic's own url-source fetch got refused on one such CDN) —
+# so we always fetch external images ourselves rather than passing the bare
+# URL for Claude to fetch.
+_FETCH_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; AlaiyOS-ListingEnrichment/1.0)"}
+
+# Image generation goes through OpenRouter's own Unified Image API
+# (POST /api/v1/images) — see generate_image.
 _IMAGE_GEN_MODEL = "openai/gpt-image-1"
 
 # ERPNext default price lists. Adjust if The Solist renames them.
@@ -96,6 +104,27 @@ def _image_block_from_file(file_name):
 		return None
 
 
+def _fetch_image_block(image_url):
+	"""Download an external image URL ourselves and build a base64 Anthropic
+	image block from it — more reliable than a url-source block, since some
+	CDNs refuse fetches with no browser-like User-Agent."""
+	import requests
+
+	resp = requests.get(image_url, timeout=30, headers=_FETCH_HEADERS)
+	resp.raise_for_status()
+	media_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip()
+	if not media_type or not media_type.startswith("image/"):
+		media_type = _media_type(image_url) or "image/jpeg"
+	return {
+		"type": "image",
+		"source": {
+			"type": "base64",
+			"media_type": media_type,
+			"data": base64.b64encode(resp.content).decode("ascii"),
+		},
+	}
+
+
 def _collect_image_blocks(item):
 	"""
 	Gather up to _MAX_IMAGES photo blocks for an Item: its File attachments
@@ -131,8 +160,10 @@ def _collect_image_blocks(item):
 			if block:
 				blocks.append((main, block))
 		elif main.startswith("http") and _media_type(main):
-			# External URL — let Anthropic fetch it directly.
-			blocks.append((main, {"type": "image", "source": {"type": "url", "url": main}}))
+			try:
+				blocks.append((main, _fetch_image_block(main)))
+			except Exception:
+				pass
 
 	return blocks
 
@@ -191,42 +222,92 @@ def get_product(item_code):
 	return {"_content_blocks": blocks}
 
 
-def generate_image(kind, brief):
+def view_image(image_url):
 	"""
-	Generate one editorial shot via OpenRouter (gpt-image-1), store it as a
-	public File, and return {kind, brief, url} — the exact shape the model
-	should copy into the final `images` array — plus a vision block of the
-	image itself so the model can sanity-check it.
+	Fetch an external image URL and hand it back as a vision block, so the
+	model can actually look at a product it only knows as a bare URL (no
+	item_code / File attachment to read a photo from otherwise).
+	"""
+	return {
+		"_content_blocks": [
+			{"type": "text", "text": f"Reference image ({image_url}):"},
+			_fetch_image_block(image_url),
+		]
+	}
+
+
+def _generate_one_image(api_key, prompt, reference_data_uri):
+	"""One call to OpenRouter's Unified Image API. Returns (b64_json, media_type, usage)."""
+	import requests
+
+	payload = {"model": _IMAGE_GEN_MODEL, "prompt": prompt, "n": 1, "output_format": "png"}
+	if reference_data_uri:
+		payload["input_references"] = [{"type": "image_url", "image_url": {"url": reference_data_uri}}]
+
+	resp = requests.post(
+		"https://openrouter.ai/api/v1/images",
+		headers={"Authorization": f"Bearer {api_key}"},
+		json=payload,
+		timeout=180,
+	)
+	if resp.status_code != 200:
+		frappe.throw(f"Image generation failed ({resp.status_code}): {resp.text[:500]}")
+	data = resp.json()
+	image = data["data"][0]
+	return image["b64_json"], image.get("media_type", "image/png"), data.get("usage", {})
+
+
+def generate_product_images(briefs, reference_image_url=None):
+	"""
+	Generate up to 5 editorial shots in one call via OpenRouter's Unified
+	Image API (POST /api/v1/images — a dedicated OpenRouter endpoint, NOT the
+	OpenAI Images REST API; confirmed live, the OpenAI SDK's images.generate/
+	images.edit both 404 against OpenRouter). Each of `briefs` is
+	{"kind": ..., "brief": ...}; each is saved as its own public File.
+	Returns {"images": [{kind, brief, url}, ...]} — copy that list verbatim
+	into the final `images` array.
+
+	If openrouter_api_key isn't configured, the model is told (via the thrown
+	message) not to retry and to fall back to url=null placeholders instead
+	of stalling the rest of the listing on missing image infrastructure.
+
+	When reference_image_url is given, that photo is downloaded once and
+	passed to every shot as a base64 input_reference, so all of them stay
+	grounded in the real product instead of imagining one from text alone.
+	(Downloaded ourselves rather than handed to OpenRouter as a bare URL
+	because some product-photo CDNs refuse fetches with no browser-like
+	User-Agent — see _fetch_image_block.)
 	"""
 	api_key = frappe.conf.get("openrouter_api_key")
 	if not api_key:
-		frappe.throw("Set openrouter_api_key in site_config.json before generating images.")
+		frappe.throw(
+			"Image generation is not configured (set openrouter_api_key in "
+			"site_config.json). Do NOT retry; return each image with url=null "
+			"and its brief so the team can shoot or generate it manually."
+		)
 
-	import openai
 	from frappe.utils.file_manager import save_file
 
-	client = openai.OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
-	response = client.images.generate(model=_IMAGE_GEN_MODEL, prompt=brief, n=1)
-	b64_data = response.data[0].b64_json
-	content = base64.b64decode(b64_data)
+	reference_data_uri = None
+	if reference_image_url:
+		ref_source = _fetch_image_block(reference_image_url)["source"]
+		reference_data_uri = f"data:{ref_source['media_type']};base64,{ref_source['data']}"
 
-	file_name = f"listing-{kind}-{frappe.generate_hash(length=8)}.png"
-	file_doc = save_file(file_name, content, None, None, is_private=0)
+	images = []
+	total_tokens = 0
+	for entry in briefs[:5]:
+		b64_data, media_type, usage = _generate_one_image(api_key, entry["brief"], reference_data_uri)
+		total_tokens += usage.get("total_tokens", 0)
 
-	result = {"kind": kind, "brief": brief, "url": file_doc.file_url}
-	return {
-		"_content_blocks": [
-			{"type": "text", "text": frappe.as_json(result)},
-			{
-				"type": "image",
-				"source": {
-					"type": "base64",
-					"media_type": "image/png",
-					"data": b64_data,
-				},
-			},
-		]
-	}
+		ext = _MEDIA_TYPES_BY_MIME.get(media_type, ".png")
+		file_name = f"listing-{entry['kind']}-{frappe.generate_hash(length=8)}{ext}"
+		file_doc = save_file(file_name, base64.b64decode(b64_data), None, None, is_private=0)
+
+		images.append({"kind": entry["kind"], "brief": entry["brief"], "url": file_doc.file_url})
+
+	# Surface cost via the executor's "_usage" convention so it lands in
+	# OS Agent Run.image_tokens instead of vanishing from token accounting.
+	return {"images": images, "_usage": {"image_tokens": total_tokens}}
 
 
 def _distinct_csv_values(doctype, column, limit=2000):

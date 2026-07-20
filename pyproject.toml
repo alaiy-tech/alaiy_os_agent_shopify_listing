@@ -9,7 +9,8 @@ readme = "README.md"
 dynamic = ["version"]
 dependencies = [
     # "frappe~=16.0.0" # Installed and managed by bench.
-    "openai",
+    # generate_image uses OpenRouter's Unified Image API directly via
+    # requests (a Frappe dependency already) — no SDK needed.
 ]
 
 [build-system]
