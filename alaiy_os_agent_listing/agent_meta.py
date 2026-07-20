@@ -103,5 +103,36 @@ agent_meta = {
 			},
 			"connector": None,
 		},
+		{
+			"tool_id": "generate_image",
+			"description": (
+				"Generate one editorial product image. Call this once per shot in "
+				"the `images` set (hero, detail, angle, lifestyle, scale) using "
+				"whatever product evidence is available (supplier photos, "
+				"description, or a reference image URL). `brief` must be a "
+				"detailed, self-contained prompt describing the exact product "
+				"(material, style, gemstone, setting) and the shot itself "
+				"(framing, background, lighting) — the image model has no memory "
+				"of the conversation, only this brief. Returns the stored file's "
+				"url; use it verbatim in the final `images` array."
+			),
+			"handler": "alaiy_os_agent_listing.tools.handlers.generate_image",
+			"parameters_schema": {
+				"type": "object",
+				"properties": {
+					"kind": {
+						"type": "string",
+						"enum": ["hero", "detail", "angle", "lifestyle", "scale"],
+						"description": "Which shot in the image set this is.",
+					},
+					"brief": {
+						"type": "string",
+						"description": "Detailed, self-contained prompt for the image to generate.",
+					},
+				},
+				"required": ["kind", "brief"],
+			},
+			"connector": None,
+		},
 	],
 }

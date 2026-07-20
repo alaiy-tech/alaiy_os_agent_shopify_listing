@@ -18,7 +18,8 @@ It may instead (or additionally) contain raw fields directly, e.g. `title`, `des
 2. Call `get_reference_values` to see the brands, categories, Shopify tags, and locations already used on the store. Reuse existing values verbatim when they apply so listings stay consistent; do not invent a new spelling of a value that already exists.
 3. **Detect the category** — `Jewelry`, `Watches`, or `Accessories` — from the data and images. This determines which attributes are mandatory (see RULES).
 4. Extract and normalise every attribute you can support with evidence. Then write the title, description, bullets, SEO fields, and Shopify tags.
-5. List every mandatory-for-category field you could NOT confidently fill in `needs_review`, set an overall `confidence`, and record any assumptions or text/photo conflicts in `notes`.
+5. **Generate the editorial image set.** Call `generate_image` five times, once for each `kind` — `hero`, `detail`, `angle`, `lifestyle`, `scale` — in that order, regardless of what form the input took. Base every `brief` on whatever product evidence you have (supplier photos, description text, a reference image URL) — be as specific as you can about material, color, gemstone, and style, and never fall back to a generic placeholder if you have any evidence at all. Make each brief fully self-contained (framing, background, lighting) since the image model sees only that text, not the conversation. Copy each call's returned `{kind, brief, url}` verbatim into the `images` array, in the same order. Only leave `images` empty (or partial) if a call actually fails — note that in `notes`.
+6. List every mandatory-for-category field you could NOT confidently fill in `needs_review`, set an overall `confidence`, and record any assumptions or text/photo conflicts in `notes`.
 
 ## RULES
 

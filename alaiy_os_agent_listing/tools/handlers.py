@@ -18,8 +18,10 @@ model as an errored tool_result. We still prefer to degrade gracefully (skip an
 unreadable image, guard optional custom fields) so a single bad attachment does
 not sink the whole enrichment.
 
-This agent is read-only: nothing here writes to the Item or publishes to
-Shopify. That is the admin approval / connector step.
+This agent does not edit the Item document or publish to Shopify — that is
+the admin approval / connector step. generate_image stores its output as a
+standalone public File (not attached to any doctype) so it shows up in the
+run's own output rather than mutating an Item.
 """
 
 import base64
@@ -38,6 +40,9 @@ _MEDIA_TYPES = {
 
 # Cap how many photos we send to keep token/latency cost bounded.
 _MAX_IMAGES = 5
+
+# Image generation goes through OpenRouter's OpenAI-compatible API.
+_IMAGE_GEN_MODEL = "openai/gpt-image-1"
 
 # ERPNext default price lists. Adjust if The Solist renames them.
 _SELLING_PRICE_LIST = "Standard Selling"
@@ -184,6 +189,44 @@ def get_product(item_code):
 		})
 
 	return {"_content_blocks": blocks}
+
+
+def generate_image(kind, brief):
+	"""
+	Generate one editorial shot via OpenRouter (gpt-image-1), store it as a
+	public File, and return {kind, brief, url} — the exact shape the model
+	should copy into the final `images` array — plus a vision block of the
+	image itself so the model can sanity-check it.
+	"""
+	api_key = frappe.conf.get("openrouter_api_key")
+	if not api_key:
+		frappe.throw("Set openrouter_api_key in site_config.json before generating images.")
+
+	import openai
+	from frappe.utils.file_manager import save_file
+
+	client = openai.OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
+	response = client.images.generate(model=_IMAGE_GEN_MODEL, prompt=brief, n=1)
+	b64_data = response.data[0].b64_json
+	content = base64.b64decode(b64_data)
+
+	file_name = f"listing-{kind}-{frappe.generate_hash(length=8)}.png"
+	file_doc = save_file(file_name, content, None, None, is_private=0)
+
+	result = {"kind": kind, "brief": brief, "url": file_doc.file_url}
+	return {
+		"_content_blocks": [
+			{"type": "text", "text": frappe.as_json(result)},
+			{
+				"type": "image",
+				"source": {
+					"type": "base64",
+					"media_type": "image/png",
+					"data": b64_data,
+				},
+			},
+		]
+	}
 
 
 def _distinct_csv_values(doctype, column, limit=2000):

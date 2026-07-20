@@ -13,12 +13,15 @@ produces:
 - selling-point **bullet points**,
 - **SEO** title / description / keywords,
 - **Shopify tags** and a suggested Shopify **category**,
-- category-specific **attributes** (Jewelry / Watches / Accessories), and
+- category-specific **attributes** (Jewelry / Watches / Accessories),
+- a generated **images** set (hero, detail, angle, lifestyle, scale) when supplier
+  photos alone aren't enough for a full catalog listing, and
 - a **needs_review** list flagging every mandatory field it could not fill.
 
-The agent is **read-only and advisory**: it reads the Item and its photos and
-returns a JSON object. It does **not** write back to the Item or publish to
-Shopify — that is the admin approval step and the Shopify connector's job.
+The agent is **advisory**: it reads the Item and its photos and returns a JSON
+object. It does not edit the Item's own fields or publish to Shopify — that is
+the admin approval step and the Shopify connector's job. The one exception is
+`generate_image`, which attaches generated shots as Files on the Item.
 
 ### How it works
 
@@ -32,7 +35,7 @@ just this one agent's definition:
 | `agent_meta.py` | Identity, model (`claude-opus-4-8`), `max_turns`, output format, and the tool list. |
 | `prompts/system.md` | The system prompt — role, workflow, per-category mandatory attributes, house-style rules. |
 | `schemas/output.json` | JSON Schema the final listing object must satisfy. |
-| `tools/handlers.py` | The two tool handlers. |
+| `tools/handlers.py` | The tool handlers. |
 
 **Tools**
 
@@ -44,19 +47,26 @@ just this one agent's definition:
   and locations already in use, so output stays consistent instead of inventing
   near-duplicate values. Guarded: fields added by sibling apps (thesolist,
   shopify connector) are optional.
+- `generate_image(kind, brief)` — generates one editorial shot (`kind` is
+  `hero` / `detail` / `angle` / `lifestyle` / `scale`) via OpenRouter
+  (`openai/gpt-image-1`), stores it as a standalone public File, and returns
+  `{kind, brief, url}` for the model to copy into the final `images` array.
+  Requires `openrouter_api_key` in `site_config.json`.
 
-Neither tool depends on a connector; the agent runs on `alaiy_os` + `erpnext`
-alone.
+None of the tools depend on an OS Connector; the agent runs on `alaiy_os` +
+`erpnext` alone.
 
 ### Install
 
 ```bash
 cd $PATH_TO_YOUR_BENCH
-bench get-app $URL_OF_THIS_REPO --branch version-16
+bench get-app $URL_OF_THIS_REPO --branch main
 bench --site $SITE install-app alaiy_os_agent_listing
 ```
 
 The engine's `anthropic_api_key` is managed by Alaiy OS core, not by this app.
+This app's own `generate_image` tool needs its own key —
+`openrouter_api_key` in `site_config.json`.
 
 ### Running the agent
 
