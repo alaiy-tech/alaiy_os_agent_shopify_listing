@@ -78,6 +78,31 @@
     "complications": { "type": "string", "description": "Watches, e.g. 'Date, Chronograph'." }
    }
   },
+  "images": {
+   "type": "array",
+   "description": "Generated editorial shots from generate_product_images, in the order: hero, detail, angle, lifestyle, scale. Copy the tool result's {kind, brief, url} entries verbatim. Empty if no product evidence was available at all; individual entries may have url=null if image generation wasn't configured — note that in needs_review/notes instead of blocking the rest of the listing.",
+   "maxItems": 5,
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": ["hero", "detail", "angle", "lifestyle", "scale"],
+      "description": "Which shot this is."
+     },
+     "brief": {
+      "type": "string",
+      "description": "The exact prompt passed to generate_product_images for this shot."
+     },
+     "url": {
+      "type": ["string", "null"],
+      "description": "The file url returned for this shot, or null if it could not be generated."
+     }
+    },
+    "required": ["kind", "brief", "url"]
+   }
+  },
   "needs_review": {
    "type": "array",
    "items": { "type": "string" },
@@ -94,5 +119,5 @@
    "description": "Anything the admin should know: assumptions made, ambiguities, or data conflicts between the text and the photos."
   }
  },
- "required": ["category", "title", "description", "bullet_points", "attributes", "needs_review", "confidence"]
+ "required": ["category", "title", "description", "bullet_points", "attributes", "images", "needs_review", "confidence"]
 }
