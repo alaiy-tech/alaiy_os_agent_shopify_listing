@@ -97,3 +97,88 @@ def unregister():
 	if frappe.db.exists("OS Agent Registry", agent_id):
 		frappe.delete_doc("OS Agent Registry", agent_id, ignore_permissions=True)
 		frappe.db.commit()
+
+
+# ── OS workspace sidebar entry ────────────────────────────────────────────────
+# An "Agents" collapsible section with a "Listing Enrichment" link, added to
+# alaiy_os's main "OS" workspace sidebar. alaiy_os rebuilds that sidebar
+# wholesale on every migrate; this app migrates AFTER alaiy_os (it depends on
+# it via required_apps), so appending here survives the rebuild. Kept entirely
+# in this app so the alaiy_os folder is untouched.
+
+_AGENTS_SECTION_LABEL = "Agents"
+_AGENT_PAGE = "run-agent"
+_AGENT_SIDEBAR_LABEL = "Listing Enrichment"
+_AGENT_ICON = "sparkles"
+
+
+def _os_sidebar_name():
+	"""Name of the OS Workspace Sidebar doc. Imported from alaiy_os so it
+	tracks any rename there; falls back to the known default."""
+	try:
+		from alaiy_os.constants.workspace import WORKSPACE_NAME
+		return WORKSPACE_NAME
+	except Exception:
+		return "OS"
+
+
+def _is_agents_item(item):
+	return (
+		(item.type == "Section Break" and item.label == _AGENTS_SECTION_LABEL)
+		or (item.type == "Link" and item.link_type == "Page" and item.link_to == _AGENT_PAGE)
+	)
+
+
+def sync_agent_sidebar():
+	"""
+	Add (idempotently) the "Agents" section + "Listing Enrichment" link to the
+	OS workspace sidebar. No-op until the Workspace Sidebar and the run-agent
+	Page both exist. Called on install and every migrate.
+	"""
+	if not frappe.db.exists("DocType", "Workspace Sidebar"):
+		return
+	if not frappe.db.exists("Page", _AGENT_PAGE):
+		return
+
+	name = _os_sidebar_name()
+	if not frappe.db.exists("Workspace Sidebar", name):
+		return
+
+	sidebar = frappe.get_doc("Workspace Sidebar", name)
+
+	# Drop any previously-added copy first so re-runs never stack duplicates.
+	kept = [it for it in sidebar.items if not _is_agents_item(it)]
+	if len(kept) != len(sidebar.items):
+		sidebar.set("items", kept)
+
+	sidebar.append("items", {
+		"type": "Section Break", "label": _AGENTS_SECTION_LABEL,
+		"icon": _AGENT_ICON, "child": 0, "indent": 1,
+	})
+	sidebar.append("items", {
+		"type": "Link", "link_type": "Page", "link_to": _AGENT_PAGE,
+		"label": _AGENT_SIDEBAR_LABEL, "child": 1, "icon": _AGENT_ICON,
+	})
+
+	sidebar.flags.ignore_links = True
+	sidebar.save(ignore_permissions=True)
+	frappe.db.commit()
+	frappe.clear_cache()
+
+
+def unregister_sidebar():
+	"""Remove the Agents section + Listing Enrichment link on uninstall."""
+	if not frappe.db.exists("DocType", "Workspace Sidebar"):
+		return
+	name = _os_sidebar_name()
+	if not frappe.db.exists("Workspace Sidebar", name):
+		return
+	sidebar = frappe.get_doc("Workspace Sidebar", name)
+	kept = [it for it in sidebar.items if not _is_agents_item(it)]
+	if len(kept) == len(sidebar.items):
+		return
+	sidebar.set("items", kept)
+	sidebar.flags.ignore_links = True
+	sidebar.save(ignore_permissions=True)
+	frappe.db.commit()
+	frappe.clear_cache()

@@ -1,0 +1,671 @@
+/* Run Agent — Listing Enrichment (docs/listing-agent-ui.md).
+ * Every color/font/radius/shadow below is one of this site's own OS Theme
+ * Settings tokens (--s-*, plus the generic --text-color/--border-color/etc
+ * aliases the engine block in os_theme_settings.py derives from them) --
+ * never the spec doc's literal hex values or Google Fonts. */
+
+.ra-page {
+	padding: var(--padding-lg, 20px) 0;
+	max-width: 1120px;
+	margin: 0 auto;
+}
+
+/* ── Mode toggle ──────────────────────────────────────────────────────── */
+
+.ra-toolbar {
+	display: flex;
+	justify-content: flex-end;
+	margin-bottom: 20px;
+}
+
+.ra-mode-toggle {
+	display: flex;
+	gap: 4px;
+	padding: 4px;
+	background-color: var(--subtle-fg, var(--fg-color));
+	border: 1px solid var(--border-color);
+	border-radius: var(--s-pill, 999px);
+}
+
+.ra-mode-btn {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 8px 18px;
+	border: none;
+	border-radius: var(--s-pill, 999px);
+	background: transparent;
+	color: var(--text-muted);
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+	transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+.ra-mode-btn:hover {
+	color: var(--text-color);
+}
+
+.ra-mode-btn.is-active,
+.ra-mode-btn.is-active:hover {
+	background-color: var(--s-black, var(--primary));
+	color: var(--s-on-black, #fff);
+}
+
+/* ── Cards / headers ──────────────────────────────────────────────────── */
+
+.ra-card {
+	margin-bottom: 20px;
+}
+
+.ra-card-header {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	margin-bottom: 20px;
+}
+
+.ra-card-header-text {
+	flex: 1;
+	min-width: 0;
+}
+
+.ra-card-header-text h2 {
+	margin: 0;
+	font-size: 22px;
+}
+
+.ra-card-header-text h3 {
+	margin: 0;
+	font-size: 16px;
+}
+
+.ra-card-header-text p {
+	margin: 4px 0 0;
+	font-size: 13px;
+	color: var(--text-muted);
+}
+
+.ra-icon-tile {
+	flex-shrink: 0;
+	width: 44px;
+	height: 44px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: var(--s-radius, 12px);
+	background-color: var(--bg-color, var(--fg-color));
+	border: 1px solid var(--border-color);
+	color: var(--text-color);
+}
+
+.ra-icon-tile--muted {
+	color: var(--text-muted);
+}
+
+.ra-info-strip {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 14px;
+	margin-bottom: 20px;
+	border-radius: var(--s-radius, 10px);
+	background-color: var(--subtle-fg, var(--fg-color));
+	color: var(--text-muted);
+	font-size: 12.5px;
+}
+
+/* ── Bordered field groups (Product block / Manual's Basics/Attrs/Content) */
+
+.ra-bordered-block {
+	border: 1px solid var(--border-color);
+	border-radius: var(--s-radius-lg, 14px);
+	padding: 24px;
+	margin-bottom: 20px;
+}
+
+.ra-field-grid {
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	gap: 20px;
+}
+
+.ra-field-group {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.ra-field-group--full {
+	grid-column: 1 / -1;
+}
+
+.ra-field-group label {
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--text-color);
+}
+
+.ra-input-wrap {
+	position: relative;
+}
+
+.ra-field-help {
+	margin: 0;
+	font-size: 11.5px;
+	color: var(--text-muted);
+}
+
+/* ── Additional Notes accordion ───────────────────────────────────────── */
+
+.ra-notes-accordion {
+	margin-bottom: 24px;
+}
+
+.ra-notes-toggle {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	width: 100%;
+	padding: 10px 0;
+	border: none;
+	border-bottom: 1px solid var(--border-color);
+	background: none;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text-color);
+	cursor: pointer;
+}
+
+.ra-notes-toggle svg {
+	transition: transform 0.3s ease;
+}
+
+.ra-notes-accordion.is-open .ra-notes-toggle svg {
+	transform: rotate(180deg);
+}
+
+.ra-notes-body {
+	max-height: 0;
+	opacity: 0;
+	overflow: hidden;
+	transition: max-height 0.35s ease, opacity 0.3s ease;
+}
+
+.ra-notes-accordion.is-open .ra-notes-body {
+	max-height: 220px;
+	opacity: 1;
+}
+
+.ra-notes-body-inner {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding-top: 14px;
+}
+
+.ra-notes-body-inner label {
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--text-color);
+}
+
+/* ── Enrich / Save actions ────────────────────────────────────────────── */
+
+.ra-enrich-actions {
+	display: flex;
+	justify-content: center;
+	margin-top: 28px;
+}
+
+.ra-enrich-btn {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 14px 34px;
+	border-radius: var(--s-pill, 999px);
+	border: 1px solid var(--s-black, var(--primary));
+	background-color: var(--s-black, var(--primary));
+	color: var(--s-on-black, #fff);
+	font-size: 14px;
+	font-weight: 600;
+	cursor: pointer;
+	transition: opacity 0.2s ease, background-color 0.2s ease, color 0.2s ease;
+}
+
+.ra-enrich-btn:hover {
+	opacity: 0.92;
+}
+
+.ra-enrich-btn:disabled {
+	cursor: not-allowed;
+}
+
+.ra-enrich-btn.is-done {
+	background-color: var(--s-white, var(--fg-color));
+	color: var(--s-black, var(--text-color));
+	border-color: var(--border-color);
+}
+
+/* ── Spinner (inline SVG ring) ────────────────────────────────────────────
+ * SVG, not a bordered CSS circle: the theme's global
+ * `* { border-radius: var(--s-radius-sm) !important }` squares a CSS circle
+ * on sharp themes (0 radius). An SVG <circle> keeps its shape intrinsically,
+ * so the loader stays round no matter the theme radius. */
+
+.ra-spin {
+	display: inline-block;
+	flex-shrink: 0;
+	vertical-align: middle;
+	animation: ra-spin-rotate 0.9s linear infinite;
+}
+
+.ra-spin-track {
+	fill: none;
+	stroke: var(--border-color);
+	stroke-width: 5;
+}
+
+.ra-spin-arc {
+	fill: none;
+	stroke: var(--s-black, var(--primary));
+	stroke-width: 5;
+	stroke-linecap: round;
+	/* circumference ≈ 126; a ~34-unit dash shows roughly a quarter-ring arc. */
+	stroke-dasharray: 34 200;
+}
+
+.ra-loader-card .ra-spin {
+	margin: 0 auto 20px;
+	display: block;
+}
+
+@keyframes ra-spin-rotate {
+	0% { transform: rotate(0deg); }
+	100% { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ra-spin {
+		animation-duration: 2.4s;
+	}
+}
+
+/* ── Flow area (loader / comparison) ──────────────────────────────────── */
+
+.ra-flow-area {
+	opacity: 0;
+	transform: translateY(-12px);
+	transition: opacity 0.35s ease, transform 0.35s ease;
+}
+
+.ra-flow-area.is-visible {
+	opacity: 1;
+	transform: translateY(0);
+}
+
+.ra-flow-area:empty {
+	display: none;
+}
+
+.ra-loader-card {
+	background-color: var(--card-bg, var(--fg-color));
+	border: 1px solid var(--border-color);
+	border-radius: var(--s-radius-lg, 16px);
+	padding: 48px;
+	text-align: center;
+}
+
+.ra-loader-label {
+	font-size: 15px;
+	font-weight: 600;
+	color: var(--s-black, var(--text-color));
+	margin-bottom: 4px;
+}
+
+.ra-loader-sublabel {
+	font-size: 13px;
+	color: var(--text-muted);
+}
+
+.ra-skeleton-lines {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	margin-top: 28px;
+}
+
+.ra-skeleton-line {
+	height: 10px;
+	border-radius: var(--s-radius-sm, 4px);
+	background-color: var(--subtle-fg, var(--fg-color));
+	animation: ra-pulse 1.4s ease infinite;
+}
+
+.ra-skeleton-line:nth-child(1) { width: 70%; margin: 0 auto; }
+.ra-skeleton-line:nth-child(2) { width: 55%; margin: 0 auto; }
+.ra-skeleton-line:nth-child(3) { width: 40%; margin: 0 auto; }
+
+@keyframes ra-pulse {
+	0%, 100% { opacity: 0.4; }
+	50% { opacity: 1; }
+}
+
+/* ── Comparison ───────────────────────────────────────────────────────── */
+
+.ra-comparison-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 24px;
+	/* Each card sizes to its own content. Without this, grid's default
+	 * align-items:stretch makes both cards as tall as the taller one, so
+	 * collapsing one still leaves it holding its sibling's height — making
+	 * the two collapses look coupled. */
+	align-items: start;
+}
+
+.ra-compare-card {
+	background-color: var(--card-bg, var(--fg-color));
+	border: 1px solid var(--border-color);
+	border-radius: var(--s-radius-lg, 16px);
+	padding: 22px;
+}
+
+.ra-compare-header {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin-bottom: 18px;
+}
+
+.ra-collapse-btn {
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	border: none;
+	background: none;
+	color: var(--text-muted);
+	cursor: pointer;
+	border-radius: var(--s-radius-sm, 6px);
+}
+
+.ra-collapse-btn:hover {
+	background-color: var(--subtle-fg, var(--fg-color));
+}
+
+.ra-collapse-btn svg {
+	transition: transform 0.3s ease;
+}
+
+.ra-compare-card.is-collapsed .ra-collapse-btn svg {
+	transform: rotate(-90deg);
+}
+
+.ra-compare-body {
+	max-height: 2000px;
+	opacity: 1;
+	overflow: hidden;
+	transition: max-height 0.35s ease, opacity 0.3s ease;
+}
+
+.ra-compare-card.is-collapsed .ra-compare-body {
+	max-height: 0;
+	opacity: 0;
+}
+
+.ra-field-block {
+	margin-bottom: 16px;
+}
+
+.ra-field-block:last-child {
+	margin-bottom: 0;
+}
+
+.ra-static-value {
+	font-size: 13px;
+	color: var(--text-muted);
+	padding: 8px 0;
+}
+
+.ra-attr-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.ra-attr-list li {
+	display: flex;
+	justify-content: space-between;
+	padding: 6px 0;
+	font-size: 13px;
+	border-bottom: 1px solid var(--border-color);
+	color: var(--text-color);
+}
+
+.ra-attr-list li:last-child {
+	border-bottom: none;
+}
+
+.ra-attr-list li span:first-child {
+	color: var(--text-muted);
+}
+
+.ra-listing-badges {
+	display: flex;
+	gap: 8px;
+	margin-bottom: 16px;
+}
+
+.ra-callout {
+	padding: 12px 16px;
+	border-radius: var(--s-radius, 10px);
+	margin-bottom: 18px;
+	border: 1px solid var(--border-color);
+}
+
+.ra-callout-title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-weight: 600;
+	font-size: 12.5px;
+	color: var(--text-color);
+}
+
+/* Frappe's base `.icon { margin: 0 auto }` — inside these flex rows the auto
+ * side margins swallow the free space and shove the icon far from its label
+ * (the "icon floating away from the text" bug). Neutralise it wherever an icon
+ * sits next to text in a flex row; the row's own `gap` handles the spacing. */
+.ra-mode-btn .icon,
+.ra-info-strip .icon,
+.ra-enrich-btn .icon,
+.ra-notes-toggle .icon,
+.ra-callout-title .icon,
+.ra-toggle-label .icon {
+	margin: 0;
+	flex-shrink: 0;
+}
+
+.ra-callout ul {
+	margin: 8px 0 0;
+	padding-left: 20px;
+	font-size: 12px;
+	color: var(--text-color);
+}
+
+.ra-callout--warning {
+	background-color: var(--yellow-100, #fff3cd);
+	border-color: var(--yellow-300, #faebcc);
+}
+
+.ra-callout--error {
+	background-color: var(--red-100, #f8d7da);
+	border-color: var(--red-200, #f1aeb5);
+}
+
+.ra-error-details {
+	margin-top: 10px;
+}
+
+.ra-error-details summary {
+	cursor: pointer;
+	font-size: 12px;
+	color: var(--text-muted);
+}
+
+.ra-error-details pre {
+	margin-top: 8px;
+	max-height: 240px;
+	overflow: auto;
+	font-size: 11px;
+	padding: 10px;
+	background: var(--control-bg);
+	border-radius: var(--s-radius, 6px);
+	border: 1px solid var(--border-color);
+}
+
+.ra-bullet-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.ra-section-title {
+	font-size: 12px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+	color: var(--text-muted);
+	margin: 4px 0 12px;
+}
+
+/* ── "Enrich images" toggle ───────────────────────────────────────────────
+ * A checkbox-driven switch. Radius is left to the theme (no !important
+ * override): a sharp theme yields a squared switch, a rounded one a pill —
+ * matching how every other control here honours --s-radius. */
+
+.ra-toggle-row {
+	margin-top: 22px;
+}
+
+.ra-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	cursor: pointer;
+	margin: 0;
+}
+
+.ra-toggle input {
+	position: absolute;
+	opacity: 0;
+	width: 0;
+	height: 0;
+}
+
+.ra-toggle-track {
+	position: relative;
+	flex-shrink: 0;
+	width: 38px;
+	height: 22px;
+	border-radius: var(--s-radius-sm, 4px);
+	background-color: var(--control-bg, var(--fg-color));
+	border: 1px solid var(--border-color);
+	transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.ra-toggle-thumb {
+	position: absolute;
+	top: 2px;
+	left: 2px;
+	width: 16px;
+	height: 16px;
+	border-radius: var(--s-radius-sm, 3px);
+	background-color: var(--text-muted);
+	transition: transform 0.2s ease, background-color 0.2s ease;
+}
+
+.ra-toggle input:checked + .ra-toggle-track {
+	background-color: var(--s-black, var(--primary));
+	border-color: var(--s-black, var(--primary));
+}
+
+.ra-toggle input:checked + .ra-toggle-track .ra-toggle-thumb {
+	transform: translateX(16px);
+	background-color: var(--s-on-black, #fff);
+}
+
+.ra-toggle input:focus-visible + .ra-toggle-track {
+	box-shadow: 0 0 0 3px var(--s-hover, rgba(0, 0, 0, 0.12));
+}
+
+.ra-toggle-label {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text-color);
+}
+
+.ra-toggle-row .ra-field-help {
+	margin-top: 6px;
+}
+
+/* ── Generated images ─────────────────────────────────────────────────── */
+
+.ra-images-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+	gap: 10px;
+	margin-top: 6px;
+}
+
+.ra-image-tile {
+	text-align: center;
+}
+
+.ra-image-tile img {
+	width: 100%;
+	aspect-ratio: 1;
+	object-fit: cover;
+	border-radius: var(--s-radius, 8px);
+	border: 1px solid var(--border-color);
+	display: block;
+}
+
+.ra-image-placeholder {
+	width: 100%;
+	aspect-ratio: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: var(--s-radius, 8px);
+	border: 1px dashed var(--border-color);
+	color: var(--text-muted);
+}
+
+.ra-image-kind {
+	margin-top: 5px;
+	font-size: 11px;
+	color: var(--text-muted);
+}
+
+/* ── Responsive ───────────────────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+	.ra-field-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.ra-comparison-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.ra-toolbar {
+		justify-content: center;
+	}
+}

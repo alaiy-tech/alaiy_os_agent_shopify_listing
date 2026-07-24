@@ -45,7 +45,9 @@ required_apps = ["alaiy_os", "erpnext"]
 # page_js = {"page" : "public/js/file.js"}
 
 # include js in doctype views
-# doctype_js = {"doctype" : "public/js/doctype.js"}
+# "Enrich" button on the Item form -> deep-links to the Listing Enrichment
+# agent (run-agent page) with the item pre-selected. See public/js/item_enrich.js.
+doctype_js = {"Item": "public/js/item_enrich.js"}
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
@@ -91,20 +93,27 @@ required_apps = ["alaiy_os", "erpnext"]
 # Registry from agent_meta.py. It is idempotent, so it runs on both install
 # (agent works immediately) and every migrate (prompt/tool/model edits in
 # source are reconciled onto the site).
+# sync_agent_sidebar() adds the "Agents" section + "Listing Enrichment" link to
+# alaiy_os's OS workspace sidebar. It runs after alaiy_os's own sidebar rebuild
+# (this app migrates last, being downstream of alaiy_os), so the addition sticks.
 after_install = [
-    "alaiy_os_agent_listing.setup.install.sync_agent_registry"
+    "alaiy_os_agent_listing.setup.install.sync_agent_registry",
+    "alaiy_os_agent_listing.setup.install.sync_agent_sidebar",
 ]
 
 after_migrate = [
-    "alaiy_os_agent_listing.setup.install.sync_agent_registry"
+    "alaiy_os_agent_listing.setup.install.sync_agent_registry",
+    "alaiy_os_agent_listing.setup.install.sync_agent_sidebar",
 ]
 
 # ---------------------------------------------------------------------------
 # Uninstallation
 # ---------------------------------------------------------------------------
-# Remove this agent's OS Agent Registry row (OS Agent Run history is kept).
+# Remove this agent's OS Agent Registry row (OS Agent Run history is kept) and
+# its sidebar entry.
 before_uninstall = [
-    "alaiy_os_agent_listing.setup.install.unregister"
+    "alaiy_os_agent_listing.setup.install.unregister",
+    "alaiy_os_agent_listing.setup.install.unregister_sidebar",
 ]
 
 # Integration Setup

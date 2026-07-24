@@ -1,0 +1,11 @@
+{
+ "doctype": "Page",
+ "module": "Alaiy Os Agent Listing",
+ "name": "run-agent",
+ "page_name": "run-agent",
+ "standard": "Yes",
+ "system_page": 0,
+ "title": "Run Agent",
+ "icon": "sparkles",
+ "roles": []
+}
