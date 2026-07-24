@@ -1,5 +1,5 @@
 [project]
-name = "alaiy_os_agent_listing"
+name = "alaiy_os_agent_shopify_listing"
 authors = [
     { name = "Alaiy", email = "mail@alaiy.com"}
 ]

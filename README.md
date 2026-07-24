@@ -74,7 +74,7 @@ None of the tools depend on an OS Connector; the agent runs on `alaiy_os` +
 ```bash
 cd $PATH_TO_YOUR_BENCH
 bench get-app $URL_OF_THIS_REPO --branch main
-bench --site $SITE install-app alaiy_os_agent_listing
+bench --site $SITE install-app alaiy_os_agent_shopify_listing
 ```
 
 The engine's `anthropic_api_key` is managed by Alaiy OS core, not by this app.
@@ -98,7 +98,7 @@ render on the product page for admin review and approval.
 This app uses `pre-commit` (ruff, eslint, prettier, pyupgrade):
 
 ```bash
-cd apps/alaiy_os_agent_listing
+cd apps/alaiy_os_agent_shopify_listing
 pre-commit install
 ```
 

@@ -34,7 +34,7 @@ def sync_agent_registry():
 	if not frappe.db.exists("DocType", "OS Agent Registry"):
 		return
 
-	from alaiy_os_agent_listing.agent_meta import agent_meta
+	from alaiy_os_agent_shopify_listing.agent_meta import agent_meta
 
 	agent_id = agent_meta["agent_id"]
 
@@ -91,7 +91,7 @@ def unregister():
 	Remove this agent's OS Agent Registry row on uninstall. OS Agent Run history
 	is intentionally left intact for audit.
 	"""
-	from alaiy_os_agent_listing.agent_meta import agent_meta
+	from alaiy_os_agent_shopify_listing.agent_meta import agent_meta
 
 	agent_id = agent_meta["agent_id"]
 	if frappe.db.exists("OS Agent Registry", agent_id):

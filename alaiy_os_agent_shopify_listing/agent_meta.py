@@ -84,7 +84,7 @@ agent_meta = {
 				"earring back, style and other visual attributes. Each photo is "
 				"labelled with its source (Original vs. AI Enhanced)."
 			),
-			"handler": "alaiy_os_agent_listing.tools.handlers.get_product",
+			"handler": "alaiy_os_agent_shopify_listing.tools.handlers.get_product",
 			"parameters_schema": {
 				"type": "object",
 				"properties": {
@@ -107,7 +107,7 @@ agent_meta = {
 				"so your output stays consistent with existing listings instead of "
 				"inventing new variants of the same value."
 			),
-			"handler": "alaiy_os_agent_listing.tools.handlers.get_reference_values",
+			"handler": "alaiy_os_agent_shopify_listing.tools.handlers.get_reference_values",
 			"parameters_schema": {
 				"type": "object",
 				"properties": {},
@@ -124,7 +124,7 @@ agent_meta = {
 				"accurately describe, enrich, or generate imagery for a product "
 				"you have never looked at."
 			),
-			"handler": "alaiy_os_agent_listing.tools.handlers.view_image",
+			"handler": "alaiy_os_agent_shopify_listing.tools.handlers.view_image",
 			"parameters_schema": {
 				"type": "object",
 				"properties": {
@@ -162,7 +162,7 @@ agent_meta = {
 				"generation isn't configured, each entry comes back with url=null "
 				"— do not retry, just include them as-is and note it."
 			),
-			"handler": "alaiy_os_agent_listing.tools.handlers.generate_product_images",
+			"handler": "alaiy_os_agent_shopify_listing.tools.handlers.generate_product_images",
 			"parameters_schema": {
 				"type": "object",
 				"properties": {
@@ -232,7 +232,7 @@ agent_meta = {
 				"Skip this tool ONLY when there is no item_code (a URL-only "
 				"input), since the record is keyed to the product's item_code."
 			),
-			"handler": "alaiy_os_agent_listing.tools.handlers.save_listing",
+			"handler": "alaiy_os_agent_shopify_listing.tools.handlers.save_listing",
 			"parameters_schema": {
 				"type": "object",
 				"properties": {

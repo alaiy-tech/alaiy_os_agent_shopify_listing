@@ -1,5 +1,5 @@
-app_name = "alaiy_os_agent_listing"
-app_title = "Alaiy Os Agent Listing"
+app_name = "alaiy_os_agent_shopify_listing"
+app_title = "Alaiy Os Agent Shopify Listing"
 app_publisher = "Alaiy"
 app_description = "Listing enrichment agent for AlaiyOS"
 app_email = "mail@alaiy.com"
@@ -15,11 +15,11 @@ required_apps = ["alaiy_os", "erpnext"]
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [
 # 	{
-# 		"name": "alaiy_os_agent_listing",
-# 		"logo": "/assets/alaiy_os_agent_listing/logo.png",
-# 		"title": "Alaiy Os Agent Listing",
-# 		"route": "/alaiy_os_agent_listing",
-# 		"has_permission": "alaiy_os_agent_listing.api.permission.has_app_permission"
+# 		"name": "alaiy_os_agent_shopify_listing",
+# 		"logo": "/assets/alaiy_os_agent_shopify_listing/logo.png",
+# 		"title": "Alaiy Os Agent Shopify Listing",
+# 		"route": "/alaiy_os_agent_shopify_listing",
+# 		"has_permission": "alaiy_os_agent_shopify_listing.api.permission.has_app_permission"
 # 	}
 # ]
 
@@ -27,15 +27,15 @@ required_apps = ["alaiy_os", "erpnext"]
 # ------------------
 
 # include js, css files in header of desk.html
-# app_include_css = "/assets/alaiy_os_agent_listing/css/alaiy_os_agent_listing.css"
-# app_include_js = "/assets/alaiy_os_agent_listing/js/alaiy_os_agent_listing.js"
+# app_include_css = "/assets/alaiy_os_agent_shopify_listing/css/alaiy_os_agent_shopify_listing.css"
+# app_include_js = "/assets/alaiy_os_agent_shopify_listing/js/alaiy_os_agent_shopify_listing.js"
 
 # include js, css files in header of web template
-# web_include_css = "/assets/alaiy_os_agent_listing/css/alaiy_os_agent_listing.css"
-# web_include_js = "/assets/alaiy_os_agent_listing/js/alaiy_os_agent_listing.js"
+# web_include_css = "/assets/alaiy_os_agent_shopify_listing/css/alaiy_os_agent_shopify_listing.css"
+# web_include_js = "/assets/alaiy_os_agent_shopify_listing/js/alaiy_os_agent_shopify_listing.js"
 
 # include custom scss in every website theme (without file extension ".scss")
-# website_theme_scss = "alaiy_os_agent_listing/public/scss/website"
+# website_theme_scss = "alaiy_os_agent_shopify_listing/public/scss/website"
 
 # include js, css files in header of web form
 # webform_include_js = {"doctype": "public/js/doctype.js"}
@@ -55,7 +55,7 @@ doctype_js = {"Item": "public/js/item_enrich.js"}
 # Svg Icons
 # ------------------
 # include app icons in desk
-# app_include_icons = "alaiy_os_agent_listing/public/icons.svg"
+# app_include_icons = "alaiy_os_agent_shopify_listing/public/icons.svg"
 
 # Home Pages
 # ----------
@@ -82,8 +82,8 @@ doctype_js = {"Item": "public/js/item_enrich.js"}
 
 # add methods and filters to jinja environment
 # jinja = {
-# 	"methods": "alaiy_os_agent_listing.utils.jinja_methods",
-# 	"filters": "alaiy_os_agent_listing.utils.jinja_filters"
+# 	"methods": "alaiy_os_agent_shopify_listing.utils.jinja_methods",
+# 	"filters": "alaiy_os_agent_shopify_listing.utils.jinja_filters"
 # }
 
 # ---------------------------------------------------------------------------
@@ -97,13 +97,13 @@ doctype_js = {"Item": "public/js/item_enrich.js"}
 # alaiy_os's OS workspace sidebar. It runs after alaiy_os's own sidebar rebuild
 # (this app migrates last, being downstream of alaiy_os), so the addition sticks.
 after_install = [
-    "alaiy_os_agent_listing.setup.install.sync_agent_registry",
-    "alaiy_os_agent_listing.setup.install.sync_agent_sidebar",
+    "alaiy_os_agent_shopify_listing.setup.install.sync_agent_registry",
+    "alaiy_os_agent_shopify_listing.setup.install.sync_agent_sidebar",
 ]
 
 after_migrate = [
-    "alaiy_os_agent_listing.setup.install.sync_agent_registry",
-    "alaiy_os_agent_listing.setup.install.sync_agent_sidebar",
+    "alaiy_os_agent_shopify_listing.setup.install.sync_agent_registry",
+    "alaiy_os_agent_shopify_listing.setup.install.sync_agent_sidebar",
 ]
 
 # ---------------------------------------------------------------------------
@@ -112,8 +112,8 @@ after_migrate = [
 # Remove this agent's OS Agent Registry row (OS Agent Run history is kept) and
 # its sidebar entry.
 before_uninstall = [
-    "alaiy_os_agent_listing.setup.install.unregister",
-    "alaiy_os_agent_listing.setup.install.unregister_sidebar",
+    "alaiy_os_agent_shopify_listing.setup.install.unregister",
+    "alaiy_os_agent_shopify_listing.setup.install.unregister_sidebar",
 ]
 
 # Integration Setup
@@ -121,28 +121,28 @@ before_uninstall = [
 # To set up dependencies/integrations with other apps
 # Name of the app being installed is passed as an argument
 
-# before_app_install = "alaiy_os_agent_listing.utils.before_app_install"
-# after_app_install = "alaiy_os_agent_listing.utils.after_app_install"
+# before_app_install = "alaiy_os_agent_shopify_listing.utils.before_app_install"
+# after_app_install = "alaiy_os_agent_shopify_listing.utils.after_app_install"
 
 # Integration Cleanup
 # -------------------
 # To clean up dependencies/integrations with other apps
 # Name of the app being uninstalled is passed as an argument
 
-# before_app_uninstall = "alaiy_os_agent_listing.utils.before_app_uninstall"
-# after_app_uninstall = "alaiy_os_agent_listing.utils.after_app_uninstall"
+# before_app_uninstall = "alaiy_os_agent_shopify_listing.utils.before_app_uninstall"
+# after_app_uninstall = "alaiy_os_agent_shopify_listing.utils.after_app_uninstall"
 
 # Build
 # ------------------
 # To hook into the build process
 
-# after_build = "alaiy_os_agent_listing.build.after_build"
+# after_build = "alaiy_os_agent_shopify_listing.build.after_build"
 
 # Desk Notifications
 # ------------------
 # See frappe.core.notifications.get_notification_config
 
-# notification_config = "alaiy_os_agent_listing.notifications.get_notification_config"
+# notification_config = "alaiy_os_agent_shopify_listing.notifications.get_notification_config"
 
 # Permissions
 # -----------
@@ -173,47 +173,47 @@ before_uninstall = [
 
 # scheduler_events = {
 # 	"all": [
-# 		"alaiy_os_agent_listing.tasks.all"
+# 		"alaiy_os_agent_shopify_listing.tasks.all"
 # 	],
 # 	"daily": [
-# 		"alaiy_os_agent_listing.tasks.daily"
+# 		"alaiy_os_agent_shopify_listing.tasks.daily"
 # 	],
 # 	"hourly": [
-# 		"alaiy_os_agent_listing.tasks.hourly"
+# 		"alaiy_os_agent_shopify_listing.tasks.hourly"
 # 	],
 # 	"weekly": [
-# 		"alaiy_os_agent_listing.tasks.weekly"
+# 		"alaiy_os_agent_shopify_listing.tasks.weekly"
 # 	],
 # 	"monthly": [
-# 		"alaiy_os_agent_listing.tasks.monthly"
+# 		"alaiy_os_agent_shopify_listing.tasks.monthly"
 # 	],
 # }
 
 # Testing
 # -------
 
-# before_tests = "alaiy_os_agent_listing.install.before_tests"
+# before_tests = "alaiy_os_agent_shopify_listing.install.before_tests"
 
 # Extend DocType Class
 # ------------------------------
 #
 # Specify custom mixins to extend the standard doctype controller.
 # extend_doctype_class = {
-# 	"Task": "alaiy_os_agent_listing.custom.task.CustomTaskMixin"
+# 	"Task": "alaiy_os_agent_shopify_listing.custom.task.CustomTaskMixin"
 # }
 
 # Overriding Methods
 # ------------------------------
 #
 # override_whitelisted_methods = {
-# 	"frappe.desk.doctype.event.event.get_events": "alaiy_os_agent_listing.event.get_events"
+# 	"frappe.desk.doctype.event.event.get_events": "alaiy_os_agent_shopify_listing.event.get_events"
 # }
 #
 # each overriding function accepts a `data` argument;
 # generated from the base implementation of the doctype dashboard,
 # along with any modifications made in other Frappe apps
 # override_doctype_dashboards = {
-# 	"Task": "alaiy_os_agent_listing.task.get_dashboard_data"
+# 	"Task": "alaiy_os_agent_shopify_listing.task.get_dashboard_data"
 # }
 
 # exempt linked doctypes from being automatically cancelled
@@ -227,13 +227,13 @@ before_uninstall = [
 
 # Request Events
 # ----------------
-# before_request = ["alaiy_os_agent_listing.utils.before_request"]
-# after_request = ["alaiy_os_agent_listing.utils.after_request"]
+# before_request = ["alaiy_os_agent_shopify_listing.utils.before_request"]
+# after_request = ["alaiy_os_agent_shopify_listing.utils.after_request"]
 
 # Job Events
 # ----------
-# before_job = ["alaiy_os_agent_listing.utils.before_job"]
-# after_job = ["alaiy_os_agent_listing.utils.after_job"]
+# before_job = ["alaiy_os_agent_shopify_listing.utils.before_job"]
+# after_job = ["alaiy_os_agent_shopify_listing.utils.after_job"]
 
 # User Data Protection
 # --------------------
@@ -263,7 +263,7 @@ before_uninstall = [
 # --------------------------------
 
 # auth_hooks = [
-# 	"alaiy_os_agent_listing.auth.validate"
+# 	"alaiy_os_agent_shopify_listing.auth.validate"
 # ]
 
 # Automatically update python controller files with type annotations for this app.
