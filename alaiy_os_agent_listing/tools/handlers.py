@@ -15,15 +15,19 @@ either:
 
 Raising is fine: the executor catches the exception and feeds it back to the
 model as an errored tool_result. We still prefer to degrade gracefully (skip an
-unreadable image, guard optional custom fields) so a single bad attachment does
-not sink the whole enrichment.
+unreadable image, guard optional rows) so a single bad attachment does not sink
+the whole enrichment.
 
-This agent does not edit the Item document or publish to Shopify — that is
-the admin approval / connector step. generate_image stores its output as a
-standalone public File (not attached to any doctype) so it shows up in the
-run's own output rather than mutating an Item. save_listing persists the
-finished enrichment into its own Enriched Listing DocType (in "Needs Review"
-status) for the admin to edit and approve — again, without touching the Item.
+The source of truth this agent reads is the **Shopify Product Listing** DocType
+(its `name` is the template item_code, autoname: field:item), NOT the Item —
+the listing's own fields (title, description, price, variants) and its `images`
+child table are all we look at. This agent does not edit the listing (or the
+Item behind it) or publish to Shopify — that is the admin approval / connector
+step. generate_product_images stores its output as a standalone public File
+(not attached to any doctype) so it shows up in the run's own output rather
+than mutating anything. save_listing persists the finished enrichment into its
+own Enriched Listing DocType (in "Needs Review" status) for the admin to edit
+and approve.
 """
 
 import base64
@@ -54,33 +58,14 @@ _FETCH_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; AlaiyOS-ListingEnrichm
 # (POST /api/v1/images) — see generate_image.
 _IMAGE_GEN_MODEL = "openai/gpt-image-1"
 
-# ERPNext default price lists. Adjust if The Solist renames them.
-_SELLING_PRICE_LIST = "Standard Selling"
-_BUYING_PRICE_LIST = "Standard Buying"
-
-# Item custom fields that may or may not exist depending on which sibling apps
-# (thesolist, shopify connector) are installed. Always read via .get().
-_OPTIONAL_ITEM_FIELDS = (
-	"internal_id",          # supplier's raw product id (thesolist)
-	"owned_by_supplier",    # Link -> Supplier (thesolist)
-	"original_price",       # retail/MSRP (thesolist)
-	"available_quantity",   # supplier feed qty (thesolist)
-	"shopify_location",     # (thesolist)
-)
+# The DocType this agent reads from. Its `name` is the template item_code
+# (autoname: field:item), so a caller's item_code doubles as the listing name.
+_LISTING_DOCTYPE = "Shopify Product Listing"
 
 
 def _media_type(path_or_name):
 	ext = os.path.splitext(path_or_name or "")[1].lower()
 	return _MEDIA_TYPES.get(ext)
-
-
-def _price(item_code, price_list):
-	"""First Item Price rate for this item on the given price list, or None."""
-	return frappe.db.get_value(
-		"Item Price",
-		{"item_code": item_code, "price_list": price_list},
-		"price_list_rate",
-	)
 
 
 def _image_block_from_file(file_name):
@@ -127,113 +112,113 @@ def _fetch_image_block(image_url):
 	}
 
 
-def _primary_image_url(item):
-	"""
-	A stable URL for the item's main photo, handed to the model so it can pass
-	it to generate_product_images as reference_image_url — every generated shot
-	then edits the real product photo instead of imagining one from text. Uses
-	item.image if set, else the oldest image attachment. Returns None if the
-	Item has no usable photo. Note this is the File's own url (e.g. a
-	'/files/...' path); generate_product_images resolves such local files
-	directly (see _reference_source).
-	"""
-	main = item.get("image")
-	if main:
-		return main
-	attachments = frappe.get_all(
-		"File",
-		filters={"attached_to_doctype": "Item", "attached_to_name": item.name},
-		fields=["file_url", "file_name"],
-		order_by="creation asc",
-	)
-	for att in attachments:
-		if att.file_url and _media_type(att.file_name or att.file_url):
-			return att.file_url
+def _image_block_from_url(url):
+	"""Build a vision block from an image URL stored on a listing row: resolve
+	a local /files or /private/files URL to its File doc, otherwise fetch an
+	external http(s) URL directly. Returns None if it cannot be read."""
+	if not url:
+		return None
+	file_name = frappe.db.get_value("File", {"file_url": url}, "name")
+	if file_name:
+		return _image_block_from_file(file_name)
+	if url.startswith("http"):
+		try:
+			return _fetch_image_block(url)
+		except Exception:
+			return None
 	return None
 
 
-def _collect_image_blocks(item):
+def _listing_image_rows(listing):
+	"""The listing's images child rows, sorted by sort_order."""
+	return sorted(
+		listing.get("images") or [],
+		key=lambda r: (r.get("sort_order") or 0),
+	)
+
+
+def _primary_listing_image_url(listing):
 	"""
-	Gather up to _MAX_IMAGES photo blocks for an Item: its File attachments
-	first, then item.image if it was not already covered. Falls back to a URL
-	image source for an external item.image that is not a stored File.
+	A stable URL for the listing's main photo, handed to the model so it can pass
+	it to generate_product_images as reference_image_url — every generated shot
+	then edits the real product photo instead of imagining one from text. Prefers
+	an ``Original`` (real) photo over an ``AI Enhanced`` render as the edit base;
+	falls back to the first image row of any source. Returns None if the listing
+	has no usable photo. Note this is the File's own url (e.g. a '/files/...'
+	path); generate_product_images resolves such local files directly (see
+	_reference_source).
+	"""
+	rows = _listing_image_rows(listing)
+	originals = [r for r in rows if (r.get("source") or "").lower().startswith("original")]
+	for row in (originals or rows):
+		if row.get("image"):
+			return row.get("image")
+	return None
+
+
+def _collect_image_blocks(listing):
+	"""
+	Gather up to _MAX_IMAGES photo blocks from a Shopify Product Listing's
+	`images` child table, in sort order. Each row's `image` is an Attach Image
+	URL (a stored File or an external URL). Labels carry the row's `source`
+	(Original / AI Enhanced) so the model knows which photos are the real
+	product vs. already-enhanced renders.
 	"""
 	blocks = []
-	seen_urls = set()
-
-	attachments = frappe.get_all(
-		"File",
-		filters={"attached_to_doctype": "Item", "attached_to_name": item.name},
-		fields=["name", "file_url", "file_name"],
-		order_by="creation asc",
-	)
-	for att in attachments:
+	for row in _listing_image_rows(listing):
 		if len(blocks) >= _MAX_IMAGES:
 			break
-		if not _media_type(att.file_name or att.file_url):
-			continue
-		block = _image_block_from_file(att.name)
+		url = row.get("image")
+		block = _image_block_from_url(url)
 		if block:
-			blocks.append((att.file_name or att.file_url, block))
-			if att.file_url:
-				seen_urls.add(att.file_url)
-
-	# Ensure the primary image is present even if it is not an attachment row.
-	main = item.get("image")
-	if main and main not in seen_urls and len(blocks) < _MAX_IMAGES:
-		file_name = frappe.db.get_value("File", {"file_url": main}, "name")
-		if file_name:
-			block = _image_block_from_file(file_name)
-			if block:
-				blocks.append((main, block))
-		elif main.startswith("http") and _media_type(main):
-			try:
-				blocks.append((main, _fetch_image_block(main)))
-			except Exception:
-				pass
-
+			label = f"{url} ({row.get('source')})" if row.get("source") else url
+			blocks.append((label, block))
 	return blocks
 
 
 def get_product(item_code):
 	"""
-	Return an Item's raw supplier data plus its product photos as vision content
-	blocks. The model receives a text block of the structured data followed by
-	one labelled image block per photo.
+	Return a Shopify Product Listing's data plus its product photos as vision
+	content blocks. The listing's `name` is the template item_code, so the
+	caller's item_code is used directly as the listing name. The model receives
+	a text block of the structured data followed by one labelled image block per
+	photo. Reads strictly from the listing — never the underlying Item.
 	"""
-	if not frappe.db.exists("Item", item_code):
+	if not frappe.db.exists(_LISTING_DOCTYPE, item_code):
 		frappe.throw(
-			f"No Item found with item_code '{item_code}'. "
-			"Check the input or ask the admin to confirm the product."
+			f"No {_LISTING_DOCTYPE} found for item_code '{item_code}'. "
+			"Check the input or ask the admin to confirm the product has a listing."
 		)
 
-	item = frappe.get_doc("Item", item_code)
+	listing = frappe.get_doc(_LISTING_DOCTYPE, item_code)
 
 	data = {
-		"item_code": item.name,
-		"title": item.item_name,
-		"description": item.description,
-		"brand": item.get("brand"),
-		"item_group": item.get("item_group"),
-		"stock_uom": item.get("stock_uom"),
-		"selling_price": _price(item_code, _SELLING_PRICE_LIST) or item.get("standard_rate"),
-		"cost_price": _price(item_code, _BUYING_PRICE_LIST),
-		"barcodes": [row.barcode for row in (item.get("barcodes") or []) if row.barcode],
+		"item_code": listing.item,
+		"title": listing.get("listing_title"),
+		"description": listing.get("listing_description"),
+		"price": listing.get("listing_price"),
+		"shopify_status": listing.get("sh_shopify_status"),
+		"is_enabled": bool(listing.get("is_enabled")),
+		"shopify_product_id": listing.get("sh_shopify_product_id"),
 		# The real product photo to reuse as the image-gen reference (or None).
-		"primary_image_url": _primary_image_url(item),
+		"primary_image_url": _primary_listing_image_url(listing),
+		"variants": [
+			{
+				"item_variant": v.get("item_variant"),
+				"price": v.get("variant_price"),
+				"is_enabled": bool(v.get("is_enabled")),
+			}
+			for v in (listing.get("variants") or [])
+		],
 	}
-	for field in _OPTIONAL_ITEM_FIELDS:
-		val = item.get(field)
-		if val not in (None, ""):
-			data[field] = val
 
-	labelled = _collect_image_blocks(item)
+	labelled = _collect_image_blocks(listing)
 	data["image_count"] = len(labelled)
 
 	blocks = [
 		{
 			"type": "text",
-			"text": "Raw product data (JSON):\n" + frappe.as_json(data),
+			"text": "Shopify Product Listing data (JSON):\n" + frappe.as_json(data),
 		}
 	]
 	if labelled:
@@ -244,8 +229,8 @@ def get_product(item_code):
 	else:
 		blocks.append({
 			"type": "text",
-			"text": "No usable product photos are attached. Enrich from the text only "
-			"and flag visual attributes in needs_review.",
+			"text": "No usable product photos are on the listing. Enrich from the text "
+			"only and flag every visually-determined attribute in needs_review.",
 		})
 
 	return {"_content_blocks": blocks}
@@ -255,7 +240,7 @@ def view_image(image_url):
 	"""
 	Fetch an external image URL and hand it back as a vision block, so the
 	model can actually look at a product it only knows as a bare URL (no
-	item_code / File attachment to read a photo from otherwise).
+	item_code / listing to read a photo from otherwise).
 	"""
 	return {
 		"_content_blocks": [
@@ -316,11 +301,11 @@ def generate_product_images(briefs, item_code=None, reference_image_url=None, ge
 	the model's judgement — by two gates:
 
 	  1. There must be an ORIGINAL product photo to edit. For an item_code run
-	     that is the Item's own image (read straight from the Item DocType); for
-	     a URL-only product it is reference_image_url. If neither exists we
-	     return an empty list and generate nothing — this agent never invents a
-	     product from scratch. This gate is airtight: it holds regardless of
-	     what the model passes.
+	     that is the listing's own primary photo (read from the Shopify Product
+	     Listing's images table); for a URL-only product it is
+	     reference_image_url. If neither exists we return an empty list and
+	     generate nothing — this agent never invents a product from scratch.
+	     This gate is airtight: it holds regardless of what the model passes.
 	  2. Generation is opt-in per request: generate_images must be true. When an
 	     original photo exists but the toggle is off, we return empty too.
 
@@ -337,8 +322,8 @@ def generate_product_images(briefs, item_code=None, reference_image_url=None, ge
 	"""
 	# ── Gate 1 (airtight): resolve the original photo; no photo → no generation.
 	reference = None
-	if item_code and frappe.db.exists("Item", item_code):
-		reference = _primary_image_url(frappe.get_doc("Item", item_code))
+	if item_code and frappe.db.exists(_LISTING_DOCTYPE, item_code):
+		reference = _primary_listing_image_url(frappe.get_doc(_LISTING_DOCTYPE, item_code))
 	if not reference and reference_image_url:
 		reference = reference_image_url
 	if not reference:
@@ -388,12 +373,12 @@ def generate_product_images(briefs, item_code=None, reference_image_url=None, ge
 def save_listing(listing, item_code=None):
 	"""
 	Persist an enriched listing into the Enriched Listing DocType for admin
-	review. Upserts by item_code (one Enriched Listing per Item): re-running the
-	agent on the same product updates the existing row instead of creating a
+	review. Upserts by item_code (one Enriched Listing per product): re-running
+	the agent on the same product updates the existing row instead of creating a
 	duplicate.
 
 	`listing` is the full enrichment object — the same shape the agent returns
-	(schemas/output.json). `item_code` identifies the source Item and is the
+	(schemas/output.json). `item_code` identifies the source product and is the
 	upsert key; it falls back to listing["item_code"] if not passed separately.
 	The row lands in "Needs Review" status so an admin edits/approves it before
 	anything is published.
@@ -409,12 +394,14 @@ def save_listing(listing, item_code=None):
 	if not item_code:
 		frappe.throw(
 			"save_listing needs an item_code (pass it, or include it in the "
-			"listing). This tool persists listings keyed to an ERPNext Item; "
-			"a URL-only product has no record to write to — skip this tool and "
-			"just return the JSON."
+			"listing). This tool persists listings keyed to a product; a URL-only "
+			"product has no record to write to — skip this tool and just return "
+			"the JSON."
 		)
-	if not frappe.db.exists("Item", item_code):
-		frappe.throw(f"No Item found with item_code '{item_code}'; cannot save the listing.")
+	if not frappe.db.exists(_LISTING_DOCTYPE, item_code):
+		frappe.throw(
+			f"No {_LISTING_DOCTYPE} found for item_code '{item_code}'; cannot save the listing."
+		)
 
 	if frappe.db.exists("Enriched Listing", item_code):
 		doc = frappe.get_doc("Enriched Listing", item_code)
