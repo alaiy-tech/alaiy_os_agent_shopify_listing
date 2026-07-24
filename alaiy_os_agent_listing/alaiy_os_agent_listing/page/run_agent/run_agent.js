@@ -11,7 +11,7 @@
 // than placeholder text. Manual mode stays a plain form with no agent
 // involvement at all — that is by design, not a shortcut.
 //
-// The "Enrich images" toggle is passed to the agent as an `enrich_images`
+// The "Enrich images" toggle is passed to the agent as a `generate_images`
 // flag in the payload; when off, the agent skips generate_product_images (see
 // prompts/system.md). Any images the agent does return are shown as thumbnails
 // in the Generated Listing panel. An "Enrich" button on the Item form
@@ -248,7 +248,7 @@ class RunAgentPage {
 			return;
 		}
 
-		this.start_enrich({ item_code, image_url, enrich_images: this.state.enrichImages });
+		this.start_enrich({ item_code, image_url, generate_images: this.state.enrichImages });
 	}
 
 	start_enrich(inputs) {
