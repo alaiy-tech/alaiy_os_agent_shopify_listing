@@ -27,6 +27,24 @@ doctype_js = {
     "Shopify Product Listing": "public/js/listing_enrich.js",
 }
 
+# The list view's "Enrich Listings" action: tick any number of listings and enrich
+# them all in one batch (api.bulk_enrich -> bulk.py).
+doctype_list_js = {
+    "Shopify Product Listing": "public/js/listing_bulk_enrich.js",
+}
+
+# Fetching the agent and building its toggle fields is shared by the form button and
+# the list-view action, so it loads for the desk rather than for one doctype.
+# Cache-busted from the current time the same way alaiy_os does it, so an edit here
+# can't sit behind a browser's asset cache after a deploy.
+import time as _time
+
+_V = str(int(_time.time()))
+
+app_include_js = [
+    f"/assets/alaiy_os_agent_shopify_listing/js/listing_agent.js?v={_V}",
+]
+
 # ---------------------------------------------------------------------------
 # Installation / migration
 # ---------------------------------------------------------------------------

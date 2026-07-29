@@ -155,11 +155,14 @@ def tool_catalog(output_schema):
 				"background, lighting) — the image model has no memory of the "
 				"conversation, only that brief and the reference photo. Returns "
 				"{images: [{kind, brief, url}, ...]}; copy that list verbatim into the "
-				"final `images` array. If it returns an empty list with a note (no "
-				"original photo, or the toggle is off), that is expected — set images "
-				"to [] and record the note. If image generation isn't configured, each "
-				"entry comes back with url=null — do not retry, just include them "
-				"as-is and note it."
+				"final `images` array. EXPECT url TO BE null: the shots are rendered "
+				"in the background after this run finishes and are attached to the "
+				"listing then. That is success, not failure — do NOT retry the tool, "
+				"do NOT call it a second time, do NOT list the images in needs_review, "
+				"and do NOT describe them as missing or failed anywhere in your "
+				"output. If it returns an empty list with a note (no original photo, "
+				"or the toggle is off), that is also expected — set images to [] and "
+				"record the note."
 			),
 			"handler": f"{_IMAGE_GEN}.generate_product_images",
 			"input_option": {
@@ -237,10 +240,17 @@ def tool_catalog(output_schema):
 				"copied verbatim from the input (default false). For a URL-only "
 				"product, pass the photo URLs as `image_urls` instead. Returns "
 				"{images: [{source_url, url, note}, ...]}; copy that list verbatim "
-				"into the final `images` array. If it returns an empty list with a "
-				"note (no photos, or the toggle is off), that is expected — set images "
-				"to [] and record the note. If image translation isn't configured, do "
-				"not retry: return each entry with url=null and note it."
+				"into the final `images` array. EXPECT url TO BE null: the photos are "
+				"translated in the background after this run finishes and are attached "
+				"to the listing then. That is success, not failure — do NOT retry the "
+				"tool, do NOT call it a second time, do NOT list the images in "
+				"needs_review, and do NOT describe them as missing or failed anywhere "
+				"in your output. Some entries MAY come back with a real url: those are "
+				"photos an earlier run already translated, reused instead of being "
+				"paid for twice. A mix of real urls and nulls in one result is normal "
+				"— copy them all verbatim exactly as returned. If it returns an empty "
+				"list with a note (no photos, or the toggle is off), that is also "
+				"expected — set images to [] and record the note."
 			),
 			"handler": f"{_IMAGE_TRANS}.translate_product_images",
 			"input_option": {

@@ -4,63 +4,121 @@
  "properties": {
   "title": {
    "type": "string",
-   "description": "The product title, for the listing's `listing_title`. It must READ naturally and at the same time contain the words a shopper would actually type to find this product — the product type and its one or two defining specs, in the shopper's own vocabulary. Front-load the most searched term. No keyword stuffing, no repetition, no ALL CAPS, no promotional words."
+   "description": "The product title, for the listing's `listing_title`. It must READ naturally and at the same time contain the words a shopper would actually type to find this product \u2014 the product type and its one or two defining specs, in the shopper's own vocabulary. Front-load the most searched term. No keyword stuffing, no repetition, no ALL CAPS, no promotional words."
   },
   "description": {
    "type": "string",
-   "description": "The product description, for the listing's `listing_description`. 2-4 short paragraphs of plain text (no HTML, no markdown). Say what the product is, what it is made of, how it is used, and what is included. The search terms a shopper would use must appear naturally in the prose — worked into real sentences, never listed or repeated for their own sake. Never invent specifications not supported by the data or the photos."
+   "description": "The product description, for the listing's `listing_description`. 2-4 short paragraphs of plain text (no HTML, no markdown). Say what the product is, what it is made of, how it is used, and what is included. The search terms a shopper would use must appear naturally in the prose \u2014 worked into real sentences, never listed or repeated for their own sake. Never invent specifications not supported by the data or the photos."
   },
   "category": {
    "type": "string",
-   "description": "The product's category, for the listing's `listing_category`. Reuse a category from get_reference_values VERBATIM when one applies — it is a link to an existing Shopify Category, so a new spelling of an existing category is a broken value, and get_reference_values shows you the ones this store already uses. Only propose a different one when none of them genuinely fits, name it in the full Shopify taxonomy style, and say so in notes. Empty string if it cannot be determined."
+   "description": "The product's category, for the listing's `listing_category`. Reuse a category from get_reference_values VERBATIM when one applies \u2014 it is a link to an existing Shopify Category, so a new spelling of an existing category is a broken value, and get_reference_values shows you the ones this store already uses. Only propose a different one when none of them genuinely fits, name it in the full Shopify taxonomy style, and say so in notes. Empty string if it cannot be determined."
   },
   "product_type": {
    "type": "string",
-   "description": "The product type, for the listing's `listing_product_type` — the specific noun for what this product IS (e.g. 'Bracelet', 'Backpack', 'Fountain Pen'), not a category path. Reuse an existing product type from get_reference_values when one fits."
+   "description": "The product type, for the listing's `listing_product_type` \u2014 the specific noun for what this product IS (e.g. 'Bracelet', 'Backpack', 'Fountain Pen'), not a category path. Reuse an existing product type from get_reference_values when one fits."
   },
   "attributes": {
    "type": "object",
-   "additionalProperties": { "type": "string" },
+   "additionalProperties": {
+    "type": "string"
+   },
    "description": "Structured product attributes as name -> value, which become the listing's Shopify metafields on publish. The named properties below are the ones nearly every listing needs; your instructions may name more, and unless they say otherwise you may ALSO add any other attribute that genuinely applies, using a lower_snake_case key and a plain-text value. Reuse an existing attribute key from get_reference_values when it means the same thing. Only include an attribute you can support from the product text or the photos. Always state the unit inside the value.",
    "properties": {
-    "material": { "type": "string", "description": "What the product is made of. Include composition percentages when given." },
-    "color": { "type": "string", "description": "Colour name. List all available colours comma-separated when the product has colour variants." },
-    "size": { "type": "string", "description": "Size or size range. Say which scale when it is regional." },
-    "dimensions": { "type": "string", "description": "Measurements, with the unit stated in the value." },
-    "weight": { "type": "string", "description": "Weight, with the unit stated in the value." },
-    "style": { "type": "string", "description": "Style classification." }
+    "material": {
+     "type": "string",
+     "description": "What the product is made of. Include composition percentages when given."
+    },
+    "color": {
+     "type": "string",
+     "description": "Colour name. List all available colours comma-separated when the product has colour variants."
+    },
+    "size": {
+     "type": "string",
+     "description": "Size or size range. Say which scale when it is regional."
+    },
+    "dimensions": {
+     "type": "string",
+     "description": "Measurements, with the unit stated in the value."
+    },
+    "weight": {
+     "type": "string",
+     "description": "Weight, with the unit stated in the value."
+    },
+    "style": {
+     "type": "string",
+     "description": "Style classification."
+    }
    }
   },
   "images": {
    "type": "array",
-   "description": "Images produced by the image step, for the listing's `images` table, in the order the tool returned them — copy its result entries verbatim. An empty array when no image step ran, when the product has no photos, or when the per-request image toggle was off. An entry whose result URL is null means that image could not be produced; record it in notes rather than blocking the rest of the listing.",
+   "description": "Images produced by the image step, for the listing's `images` table, in the order the tool returned them \u2014 copy its result entries verbatim. An empty array when no image step ran, when the product has no photos, or when the per-request image toggle was off.",
    "items": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
-     "kind": { "type": "string", "description": "What this image is, in the vocabulary your instructions give." },
-     "source_url": { "type": "string", "description": "The input photo this image was derived from, when there was one." },
-     "url": { "type": ["string", "null"], "description": "The resulting image, or null if it could not be produced." },
-     "brief": { "type": "string", "description": "The instruction used to produce this image, where the image step takes one." },
-     "note": { "type": ["string", "null"], "description": "Why this image was skipped or failed, when applicable." }
+     "kind": {
+      "type": "string",
+      "description": "What this image is, in the vocabulary your instructions give."
+     },
+     "source_url": {
+      "type": "string",
+      "description": "The input photo this image was derived from, when there was one."
+     },
+     "url": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "The resulting image, or null. Null is the normal case: the image step queues the work and it is rendered in the background after this run finishes, then attached to the listing. Copy null through as-is \u2014 it does not mean the image failed, and it does not belong in needs_review."
+     },
+     "brief": {
+      "type": "string",
+      "description": "The instruction used to produce this image, where the image step takes one."
+     },
+     "note": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "What the image step said about this entry, copied verbatim when it gave one. Leave null otherwise; do not write your own explanation of a null url."
+     }
     }
    }
   },
   "needs_review": {
    "type": "array",
-   "items": { "type": "string" },
+   "items": {
+    "type": "string"
+   },
    "description": "Human-readable names of fields that could NOT be confidently filled and must be completed by the admin before publish (e.g. 'Material', 'Product Type')."
   },
   "confidence": {
    "type": "string",
-   "enum": ["high", "medium", "low"],
+   "enum": [
+    "high",
+    "medium",
+    "low"
+   ],
    "description": "Overall confidence in the enrichment given the quality of the source data and photos."
   },
   "notes": {
    "type": "array",
-   "items": { "type": "string" },
+   "items": {
+    "type": "string"
+   },
    "description": "Anything the admin should know: assumptions made, ambiguities, a proposed new category, or conflicts between the product text and the photos."
   }
  },
- "required": ["title", "description", "category", "product_type", "attributes", "images", "needs_review", "confidence"]
+ "required": [
+  "title",
+  "description",
+  "category",
+  "product_type",
+  "attributes",
+  "images",
+  "needs_review",
+  "confidence"
+ ]
 }

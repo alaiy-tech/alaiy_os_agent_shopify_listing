@@ -7,33 +7,21 @@
 // run-agent page instead (public/js/item_enrich.js).
 //
 // Nothing here knows an agent_id or a toggle name. Both come from
-// api.get_listing_agent, so the run dialog is built from whatever the agent's tools
-// declare.
+// api.get_listing_agent via public/js/listing_agent.js, which the list view's bulk
+// action shares — so both surfaces offer exactly the same toggles.
 
-const AGENT_METHOD = "alaiy_os_agent_shopify_listing.api.get_listing_agent";
 const ENRICHED_DOCTYPE = "Shopify Enriched Listing";
 const POLL_INTERVAL_MS = 3000;
 // Runs are bounded by the agent's max_turns, but a stuck worker must not leave the
 // form polling forever.
 const POLL_TIMEOUT_MS = 5 * 60 * 1000;
 
-// Cached for the session: the form's refresh fires often, and the agent only
-// changes on a migrate or when an admin disables the agent (both a reload away).
-let _agent_promise = null;
-
-function get_agent() {
-	if (!_agent_promise) {
-		_agent_promise = frappe.xcall(AGENT_METHOD).catch(() => null);
-	}
-	return _agent_promise;
-}
-
 frappe.ui.form.on("Shopify Product Listing", {
 	refresh(frm) {
 		// Nothing to enrich until the listing exists — the agent looks it up by name.
 		if (frm.is_new()) return;
 
-		get_agent().then((agent) => {
+		alaiy.listing_agent.get().then((agent) => {
 			if (!agent) return;
 			frm.add_custom_button(__("Enrich Listing"), () => prompt_and_run(frm, agent));
 		});
@@ -49,30 +37,8 @@ frappe.ui.form.on("Shopify Product Listing", {
 	},
 });
 
-// One dialog field per input option the agent's tools declare.
-function dialog_fields(agent) {
-	const fields = (agent.input_options || []).map((opt) => ({
-		fieldname: opt.fieldname,
-		fieldtype: opt.fieldtype || "Check",
-		label: __(opt.label || opt.fieldname),
-		description: opt.description ? __(opt.description) : undefined,
-		default: opt.default === undefined ? 0 : opt.default,
-	}));
-
-	fields.push({
-		fieldname: "notes",
-		fieldtype: "Small Text",
-		label: __("Notes for the agent"),
-		description: __(
-			"Optional — condition, provenance, or anything the listing data and photos won't capture."
-		),
-	});
-
-	return fields;
-}
-
 function prompt_and_run(frm, agent) {
-	const fields = dialog_fields(agent);
+	const fields = alaiy.listing_agent.option_fields(agent);
 
 	const d = new frappe.ui.Dialog({
 		title: __("Enrich {0}", [frm.doc.name]),
@@ -81,14 +47,10 @@ function prompt_and_run(frm, agent) {
 		primary_action(values) {
 			d.hide();
 
-			const payload = { item_code: frm.doc.name };
-			fields.forEach((f) => {
-				if (f.fieldtype === "Check") {
-					payload[f.fieldname] = !!values[f.fieldname];
-				} else if (values[f.fieldname]) {
-					payload[f.fieldname] = values[f.fieldname];
-				}
-			});
+			const payload = {
+				item_code: frm.doc.name,
+				...alaiy.listing_agent.options_from(fields, values),
+			};
 
 			start_run(frm, agent.agent_id, payload);
 		},

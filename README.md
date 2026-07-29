@@ -87,9 +87,14 @@ and the Agents hub. This app owns agent definitions and their tools:
 | `tools/image_generation.py` | `generate_product_images` — a five-shot editorial set (gpt-image-1). |
 | `tools/image_translation.py` | `translate_product_images` — supplier photo text into English (alphashop). |
 | `tools/images.py` | Shared image primitives both image tools are built from. |
-| `api.py` | `get_listing_agent`, what the desk surfaces ask. |
+| `api.py` | `get_listing_agent`, what the desk surfaces ask, plus the bulk entry points. |
+| `bulk.py` | Bulk enrichment: chunks a batch across Frappe workers, one run per product. |
+| `image_stage.py` | Stage two: the images, rendered on their own queue after the listing is saved. |
+| `public/js/listing_agent.js` | The agent and its toggle fields, shared by every desk surface. |
+| `public/js/listing_bulk_enrich.js` | "Enrich Listings" in the Shopify Product Listing list view. |
 | `setup/install.py` | Registry + sidebar reconcile. |
 | `.../doctype/shopify_enriched_listing/` | The shared output DocType and its images child table. |
+| `.../doctype/shopify_listing_bulk_enrich/` | A bulk request and the state of each product in it. |
 | `.../page/run_agent/` | The Run Agent desk page. |
 
 **The four catalog tools**
@@ -109,14 +114,16 @@ and the Agents hub. This app owns agent definitions and their tools:
 
 **The two image tools**, each opt-in per request and each gated in code rather than
 by the model's judgement — they act only when the product actually has a photo *and*
-the request's toggle is true:
+the request's toggle is true. Both **queue** their work rather than doing it: see
+"Images are produced after the listing" below.
 
 - `generate_product_images(briefs, …)` — the full editorial set (hero, detail, angle,
   lifestyle, scale) in one call, every shot produced by *editing the product's real
   photo* so it never invents a product from scratch. Needs `openrouter_api_key`.
 - `translate_product_images(…)` — each supplier photo's printed text rendered into
   English, the result re-hosted locally so it survives the vendor's URL expiring.
-  Needs `alphashop_ak` / `alphashop_sk`.
+  A photo it has already translated is never translated again. Needs
+  `alphashop_ak` / `alphashop_sk`.
 
 Both are registered always and both are offered as a toggle on the desk surfaces; the
 prompt is what tells the agent which one belongs to this store. They share
@@ -155,6 +162,111 @@ GET  /api/method/alaiy_os.api.agents.get_run     {"run": "RUN-..."}             
 
 On success `output` is a JSON object matching `schemas/output.json`, and the
 same object has been persisted as a `Shopify Enriched Listing` for review.
+
+### Images are produced after the listing
+
+Enrichment runs in **two stages**, because the two halves have opposite shapes. The
+agent's run is LLM-bound and takes about half a minute; rendering a five-shot image
+set is minutes of waiting on a paid image service. Sharing one worker pool means a
+single image product holds a slot that could have cleared nine text listings, and it
+delays the listing text — the part a human actually reviews — behind imagery they
+will look at later.
+
+So the image tools do not produce images. They decide *whether* imagery happens and
+*what* it should be, queue it, and hand the model placeholders with `url: null`. The
+run finishes; `image_stage.run_step` renders the images afterwards on its own queue
+and attaches them to the listing. Within a shot set the images are produced
+concurrently, not one after another.
+
+The enriched listing therefore has **two notions of done**. `status` is the review
+state as always; `image_status` is the imagery:
+
+| | |
+|---|---|
+| `Not Required` | no image step ran for this listing |
+| `Queued` / `Running` | stage two owes it pictures |
+| `Ready` | every queued image arrived |
+| `Partial` | some arrived; the rest carry their own note, and `image_error` summarises |
+| `Failed` | none arrived — the listing text is still saved and reviewable |
+
+A listing is reviewable as soon as stage one finishes. A bulk batch reports
+`Completed` on the same basis, with `images_pending` saying how many of its products
+are still having pictures made.
+
+**Translation is never paid for twice.** Re-running the agent over a product whose
+photos were already translated reuses those results instead of sending them back to
+the service — per photo, not per product, so a listing that gained a photo pays only
+for the new one. "Already translated" means the listing holds a translated image for
+that source photo, which makes the retry case fall out for free: a photo that failed
+has no url, so it is not already translated and gets another attempt. The reused
+entries are *returned* by the tool rather than skipped, because `save_listing`
+rebuilds the image table from what the run reports — a translation left out would be
+erased from the listing.
+
+Image *generation* is deliberately not deduplicated the same way: each run writes
+fresh briefs, so re-running is a request for new imagery rather than a repeat of the
+old.
+
+The handoff cannot be corrupted by the model: the tool enqueues the job itself with
+`enqueue_after_commit=True`, so it fires on `save_listing`'s commit — the listing is
+guaranteed to exist by then — and is dropped entirely if the run fails first, because
+a rollback resets the pending after-commit callbacks.
+
+**Giving images their own queue.** Stage two runs on `long` unless the bench declares
+a dedicated queue, which is the whole point of splitting — image work should not be
+able to starve everything else. In `sites/common_site_config.json`:
+
+```json
+"workers": { "images": { "timeout": 1800, "background_workers": 4 } }
+```
+
+and in each site's `site_config.json`:
+
+```json
+"listing_image_queue": "images"
+```
+
+A queue named there but never declared under `workers` falls back to `long` and logs
+it, rather than failing the enrichment that queued it.
+
+### Running it over many products
+
+From the Desk: tick any number of rows in the **Shopify Product Listing** list and pick
+**Enrich Listings** from the Actions menu. The dialog offers the same toggles as the
+single-product button (both build it from `api.get_listing_agent`, via
+`public/js/listing_agent.js`), plus how many products each job should take. It opens the
+batch, which follows its own progress.
+
+A **Shopify Listing Bulk Enrich** is a list of products plus the toggles they share.
+Starting it queues the work on Frappe workers and **still creates one `OS Agent Run`
+per product**, so every product keeps its own output, transcript and token count —
+the batch row just links to it.
+
+```
+POST /api/method/alaiy_os_agent_shopify_listing.api.bulk_enrich
+     {"item_codes": ["<ITEM-A>", "<ITEM-B>"], "batch_size": 5, "generate_images": 1}   -> {"batch": "BULK-...", "items": 2, "jobs": 1}
+GET  /api/method/alaiy_os_agent_shopify_listing.api.get_bulk_status
+     {"batch": "BULK-..."}                                                             -> status/counters/one row per product
+```
+
+Any extra argument is a per-request toggle, taken from whatever
+`get_listing_agent` reports in `input_options` — the endpoint names no tool.
+
+Products are **chunked**, not fanned out one job apiece: the batch is split into
+chunks of `batch_size` and one background job is queued per chunk, which then runs
+its products in order. Chunk count is the parallelism knob, chunk size the per-job
+length — 200 products at the default put 40 jobs on the `long` queue rather than 200,
+which is what keeps a big batch from starving everything else on it.
+
+The batch's own `status` covers the agent runs only — imagery is stage two, so a
+`Completed` batch can still have pictures rendering. `get_bulk_status` reports
+`images_pending` for that, and each row carries its product's `image_status`.
+
+One product failing only fails its own row (`Failed`, with the reason; the run holds
+the traceback) and the batch ends *Completed with Errors*. From the batch form you can
+**Cancel** mid-flight — workers stop before their next product — and **Retry Failed**
+to re-queue just those rows. `skip_enriched` skips products that already have a
+`Shopify Enriched Listing`, so re-running a batch only fills the gaps.
 
 ### Contributing
 

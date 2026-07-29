@@ -19,6 +19,9 @@
   "attributes_section",
   "attributes_json",
   "images_section",
+  "image_status",
+  "image_error",
+  "image_tokens",
   "images_preview",
   "images",
   "review_section",
@@ -109,6 +112,32 @@
    "fieldname": "images_section",
    "fieldtype": "Section Break",
    "label": "Images"
+  },
+  {
+   "default": "Not Required",
+   "description": "Images are produced after the listing text is saved, so a listing can be ready to review while its imagery is still rendering.",
+   "fieldname": "image_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Image Status",
+   "options": "Not Required\nQueued\nRunning\nReady\nPartial\nFailed",
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.image_status==\"Failed\" || doc.image_status==\"Partial\"",
+   "fieldname": "image_error",
+   "fieldtype": "Small Text",
+   "label": "Image Error",
+   "read_only": 1
+  },
+  {
+   "description": "Tokens the image service billed for this listing. Recorded here rather than on the run, because the imagery is produced after the run closes.",
+   "fieldname": "image_tokens",
+   "fieldtype": "Int",
+   "hidden": 1,
+   "label": "Image Tokens",
+   "read_only": 1
   },
   {
    "description": "Thumbnails of what the image step produced; the child table below is always the editable source.",

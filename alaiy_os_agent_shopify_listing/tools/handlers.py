@@ -303,6 +303,20 @@ def save_listing(listing, item_code=None):
 			"note": img.get("note"),
 		})
 
+	# A row with no url is one the image step queued: the imagery is rendered after
+	# this run finishes (see image_stage.py), so the listing is reviewable now and
+	# says plainly that its pictures are still coming. Rows that already have a url
+	# are ones the image step reused from an earlier run — nothing is owed for those,
+	# so the listing is already Ready. Recomputed on every save, so a re-run that
+	# queues fresh images resets a previous run's verdict.
+	if any(not row.url for row in doc.images):
+		doc.image_status = "Queued"
+	elif doc.images:
+		doc.image_status = "Ready"
+	else:
+		doc.image_status = "Not Required"
+	doc.image_error = None
+
 	doc.save(ignore_permissions=True)
 	frappe.db.commit()
 

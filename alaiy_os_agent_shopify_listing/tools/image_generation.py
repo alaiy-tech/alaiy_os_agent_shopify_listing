@@ -7,12 +7,19 @@ editing the product's real photo.
 One of the two image steps this app ships. Both are always registered; the agent's
 prompt is what decides which it calls — see agent_meta.py. Requires
 `openrouter_api_key` in site_config.json.
+
+Two halves, split across two stages. `generate_product_images` runs inside the
+agent's run: it decides whether imagery happens at all, and queues it. The actual
+rendering is `render_generated`, which runs later on the image queue — see
+image_stage.py for why.
 """
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 
 import frappe
 
+from alaiy_os_agent_shopify_listing import image_stage
 from alaiy_os_agent_shopify_listing.tools import handlers as base
 from alaiy_os_agent_shopify_listing.tools import images
 
@@ -21,6 +28,14 @@ from alaiy_os_agent_shopify_listing.tools import images
 _IMAGE_GEN_MODEL = "openai/gpt-image-1"
 
 _MAX_SHOTS = 5
+
+# The set is rendered concurrently — see render_generated. Five at a time matches
+# _MAX_SHOTS, so a full set is one wave rather than a queue behind itself.
+_RENDER_CONCURRENCY = 5
+
+# What stage one puts on an image row that stage two has not produced yet. It is
+# read by a human on the Desk form, so it says what is happening, not "queued".
+_QUEUED_NOTE = "Being produced in the background; the image will appear here when ready."
 
 
 def _generate_one_image(api_key, prompt, reference_data_uri):
@@ -40,7 +55,9 @@ def _generate_one_image(api_key, prompt, reference_data_uri):
 		timeout=180,
 	)
 	if resp.status_code != 200:
-		frappe.throw(f"Image generation failed ({resp.status_code}): {resp.text[:500]}")
+		# A plain exception, not frappe.throw: this runs in a worker thread with no
+		# Frappe request context. render_generated turns it into a per-image note.
+		raise RuntimeError(f"Image generation failed ({resp.status_code}): {resp.text[:500]}")
 	data = resp.json()
 	image = data["data"][0]
 	return image["b64_json"], image.get("media_type", "image/png"), data.get("usage", {})
@@ -48,12 +65,21 @@ def _generate_one_image(api_key, prompt, reference_data_uri):
 
 def generate_product_images(briefs, item_code=None, reference_image_url=None, generate_images=False):
 	"""
-	Generate up to 5 editorial shots in one call via OpenRouter's Unified Image API
-	(POST /api/v1/images — a dedicated OpenRouter endpoint, NOT the OpenAI Images
-	REST API; confirmed live, the OpenAI SDK's images.generate / images.edit both
-	404 against OpenRouter). Each of `briefs` is {"kind": ..., "brief": ...}; each
-	is saved as its own public File. Returns {"images": [{kind, brief, url}, ...]} —
+	Queue up to 5 editorial shots and return immediately. Each of `briefs` is
+	{"kind": ..., "brief": ...}. Returns {"images": [{kind, brief, url}, ...]} —
 	copy that list verbatim into the final `images` array.
+
+	`url` comes back null: the shots are rendered after this run finishes, by
+	image_stage.run_step, and attached to the listing then. That is by design — a
+	five-shot set takes minutes, and holding the run open for it would block a
+	worker that could be enriching other products. The rendering itself is
+	render_generated() below, which goes to OpenRouter's Unified Image API (POST
+	/api/v1/images — a dedicated OpenRouter endpoint, NOT the OpenAI Images REST
+	API; confirmed live, the OpenAI SDK's images.generate / images.edit both 404
+	against OpenRouter) and saves each result as its own public File.
+
+	The exception is a URL-only product: it has no listing record for stage two to
+	deliver into, so its images are rendered inline and come back with real urls.
 
 	Whether we generate at all is decided HERE, deterministically — not left to the
 	model's judgement — by two gates:
@@ -98,6 +124,8 @@ def generate_product_images(briefs, item_code=None, reference_image_url=None, ge
 			"off, so no images were generated."
 		)}
 
+	# Checked here, while the model is still listening, rather than leaving it to
+	# discover a misconfigured site minutes later in the background.
 	api_key = frappe.conf.get("openrouter_api_key")
 	if not api_key:
 		frappe.throw(
@@ -106,21 +134,106 @@ def generate_product_images(briefs, item_code=None, reference_image_url=None, ge
 			"its brief so the team can shoot or generate it manually."
 		)
 
-	reference_data_uri = images.reference_data_uri(reference)
+	shots = [{"kind": entry["kind"], "brief": entry["brief"]} for entry in briefs[:_MAX_SHOTS]]
+
+	# A URL-only product has no Shopify Enriched Listing for stage two to patch, so
+	# there is nowhere to deliver the images later — render them inline, as before.
+	if not item_code:
+		result = render_generated(None, {"reference": reference, "briefs": shots})
+		return {
+			"images": result["images"],
+			# The executor's "_usage" convention, so image cost lands in the Run.
+			"_usage": {"image_tokens": result["image_tokens"]},
+		}
+
+	image_stage.queue_step(
+		item_code,
+		image_stage.GENERATE,
+		{"reference": reference, "briefs": shots},
+	)
+	return {
+		"images": [
+			{
+				"kind": shot["kind"],
+				"brief": shot["brief"],
+				"source_url": reference,
+				"url": None,
+				"note": _QUEUED_NOTE,
+			}
+			for shot in shots
+		],
+		"note": (
+			f"{len(shots)} image(s) queued. They are being produced in the background "
+			"and will be attached to this listing when they are ready — this is normal "
+			"and is NOT a failure. Copy these entries verbatim, leave url as null, and "
+			"do NOT record them in needs_review."
+		),
+	}
+
+
+def render_generated(item_code, work):
+	"""Produce the queued image set. Stage two's worker — see image_stage.py.
+
+	Returns {"images": [{kind, brief, url, note}, ...], "image_tokens": int}; an
+	entry whose generation failed comes back with url=None and a note, so one bad
+	shot costs one image rather than the whole set.
+
+	The shots are generated concurrently. They are five independent calls to a
+	service that takes about a minute each, and running them in sequence was the
+	single largest cost in the whole enrichment.
+	"""
+	api_key = frappe.conf.get("openrouter_api_key")
+	if not api_key:
+		frappe.throw("Image generation is not configured (set openrouter_api_key).")
+
+	# Resolved once, on this thread: it reads a File row or downloads the photo.
+	reference_data_uri = images.reference_data_uri(work["reference"])
+	shots = work["briefs"]
+
+	with ThreadPoolExecutor(max_workers=min(_RENDER_CONCURRENCY, len(shots) or 1)) as pool:
+		results = list(
+			pool.map(
+				lambda shot: _try_generate(api_key, shot, reference_data_uri),
+				shots,
+			)
+		)
 
 	out = []
 	total_tokens = 0
-	for entry in briefs[:_MAX_SHOTS]:
-		b64_data, media_type, usage = _generate_one_image(
-			api_key, entry["brief"], reference_data_uri
-		)
+	for shot, (payload, error) in zip(shots, results, strict=True):
+		if error:
+			# Logged here rather than in the worker thread: frappe.log_error needs
+			# the request context that only this thread has.
+			frappe.log_error(
+				title="Shopify listing: image generation failed",
+				message=f"{item_code} / {shot['kind']}\n{error}",
+			)
+			out.append({
+				"kind": shot["kind"],
+				"brief": shot["brief"],
+				"url": None,
+				"note": f"Generation failed: {error}"[:200],
+			})
+			continue
+
+		b64_data, media_type, usage = payload
 		total_tokens += usage.get("total_tokens", 0)
-
+		# Saving writes a File row, so it stays on this thread too.
 		url = images.save_public_image(
-			f"listing-{entry['kind']}", base64.b64decode(b64_data), media_type
+			f"listing-{shot['kind']}", base64.b64decode(b64_data), media_type
 		)
-		out.append({"kind": entry["kind"], "brief": entry["brief"], "url": url})
+		out.append({"kind": shot["kind"], "brief": shot["brief"], "url": url, "note": None})
 
-	# Surface cost via the executor's "_usage" convention so it lands in
-	# OS Agent Run.image_tokens instead of vanishing from token accounting.
-	return {"images": out, "_usage": {"image_tokens": total_tokens}}
+	return {"images": out, "image_tokens": total_tokens}
+
+
+def _try_generate(api_key, shot, reference_data_uri):
+	"""One shot, in a worker thread. Returns (payload, error) — never raises.
+
+	Nothing in here touches Frappe: the thread has no request context, so a
+	frappe.throw or a db read from inside it would fail in a confusing way.
+	"""
+	try:
+		return _generate_one_image(api_key, shot["brief"], reference_data_uri), None
+	except Exception as exc:
+		return None, str(exc)

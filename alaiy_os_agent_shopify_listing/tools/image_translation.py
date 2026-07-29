@@ -11,18 +11,38 @@ Requires `alphashop_ak` / `alphashop_sk` in site_config.json.
 
 Each translated photo is stored as its own public File, so the original supplier
 photo is never overwritten and a bad translation is always recoverable.
+
+Two halves, split across two stages. `translate_product_images` runs inside the
+agent's run: it decides whether translation happens at all, and queues it. The
+actual work is `render_translated`, which runs later on the image queue — see
+image_stage.py for why.
 """
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import frappe
 
+from alaiy_os_agent_shopify_listing import image_stage
 from alaiy_os_agent_shopify_listing.tools import handlers as base
 from alaiy_os_agent_shopify_listing.tools import images
 
 # Cap how many photos we push through the paid translation API per product.
 _MAX_TRANSLATED_IMAGES = 10
+
+# How many photos go through the service at once — see render_translated. Below
+# the per-product cap on purpose: this is a paid third-party API, and ten
+# simultaneous requests per product across a batch is a good way to get throttled.
+_RENDER_CONCURRENCY = 4
+
+# What stage one puts on an image row that stage two has not produced yet. It is
+# read by a human on the Desk form, so it says what is happening, not "queued".
+_QUEUED_NOTE = "Being translated in the background; the image will appear here when ready."
+
+# What goes on a photo an earlier run already translated. Also read by a human, so
+# it explains why this one has a url when its siblings do not.
+_REUSED_NOTE = "Translated on an earlier run; reused rather than translated again."
 
 # ── alphashop image translation ───────────────────────────────────────────────
 # Chinese text printed on supplier photos → English, via alphashop's
@@ -150,10 +170,20 @@ def _alphashop_translate_image(image_url, ak, sk, base_url):
 
 def translate_product_images(item_code=None, image_urls=None, translate_images=False):
 	"""
-	Translate the Chinese text printed on a product's supplier photos into English
-	via alphashop's ai.image.translateImage API. Returns
+	Queue a product's supplier photos to have their printed Chinese text rendered
+	into English, and return immediately. Returns
 	{"images": [{source_url, url, note}, ...]} — copy that list verbatim into the
 	final `images` array.
+
+	`url` comes back null: the photos are translated after this run finishes, by
+	image_stage.run_step, and attached to the listing then. That is by design — the
+	translation service takes minutes, and holding the run open for it would block
+	a worker that could be enriching other products. The work itself is
+	render_translated() below, which calls alphashop's ai.image.translateImage API
+	and re-hosts each result.
+
+	The exception is a URL-only product: it has no listing record for stage two to
+	deliver into, so its photos are translated inline and come back with real urls.
 
 	Whether we translate at all is decided HERE, deterministically — not left to the
 	model's judgement — by two gates:
@@ -165,6 +195,10 @@ def translate_product_images(item_code=None, image_urls=None, translate_images=F
 	     passes.
 	  2. Translation is opt-in per request: translate_images must be true. When
 	     photos exist but the toggle is off, we return empty too.
+	  3. A photo already translated on an earlier run is never translated again —
+	     its existing result is returned as-is. This is per photo, not per product,
+	     so a listing that gained a photo only pays for the new one. A photo that
+	     FAILED has no url and so is not "already translated": it is retried.
 
 	Per-image failures degrade rather than raise: that entry comes back with
 	url=None and a note, and the remaining photos still process. If the service
@@ -202,39 +236,141 @@ def translate_product_images(item_code=None, image_urls=None, translate_images=F
 			f"{_ALPHASHOP_SK_KEY} in site_config.json). Do NOT retry; return each "
 			"image with url=null so the team can translate it manually."
 		)
+	selected = urls[:_MAX_TRANSLATED_IMAGES]
+
+	# A URL-only product has no Shopify Enriched Listing for stage two to patch, so
+	# there is nowhere to deliver the results later — translate inline, as before.
+	if not item_code:
+		result = {"images": render_translated(None, {"urls": selected})["images"]}
+	else:
+		# ── Gate 3: never pay to translate the same photo twice.
+		done = _already_translated(item_code)
+		todo = [url for url in selected if url not in done]
+
+		# The kept entries are returned, not merely skipped: save_listing rebuilds
+		# the image table from what this run reports, so a translation left out here
+		# would be erased from the listing.
+		result = {
+			"images": [
+				{"source_url": url, "url": done[url], "note": _REUSED_NOTE}
+				for url in selected
+				if url in done
+			]
+		}
+
+		if todo:
+			image_stage.queue_step(item_code, image_stage.TRANSLATE, {"urls": todo})
+			result["images"] += [
+				{"source_url": url, "url": None, "note": _QUEUED_NOTE} for url in todo
+			]
+			result["note"] = (
+				f"{len(todo)} photo(s) queued for translation. They are being "
+				"processed in the background and will be attached to this listing when "
+				"they are ready — this is normal and is NOT a failure. Copy these "
+				"entries verbatim, leave url as null, and do NOT record them in "
+				"needs_review."
+			)
+		if len(result["images"]) > len(todo):
+			kept = len(result["images"]) - len(todo)
+			reused = (
+				f"{kept} photo(s) were translated on an earlier run and are reused "
+				"as-is, with their existing url. Copy them verbatim too."
+			)
+			result["note"] = f"{result['note']} {reused}" if result.get("note") else reused
+
+	skipped = len(urls) - len(selected)
+	if skipped > 0:
+		note = (
+			f"{skipped} further photo(s) were not translated: this product has more "
+			f"than the {_MAX_TRANSLATED_IMAGES}-photo per-run cap. Record this in notes."
+		)
+		result["note"] = f"{result['note']} {note}" if result.get("note") else note
+	return result
+
+
+def _already_translated(item_code):
+	"""{source_url: url} for photos a previous run already translated.
+
+	"Already done" means the listing holds a translated image for that exact source
+	photo. A photo that failed has no url, so it is absent from this map and gets
+	another attempt — which is the retry behaviour we want without a flag for it.
+	"""
+	if not frappe.db.exists(base.ENRICHED_DOCTYPE, item_code):
+		return {}
+
+	rows = frappe.get_all(
+		"Shopify Enriched Listing Image",
+		filters={"parent": item_code, "parenttype": base.ENRICHED_DOCTYPE},
+		fields=["source_url", "url"],
+	)
+	return {row.source_url: row.url for row in rows if row.source_url and row.url}
+
+
+def render_translated(item_code, work):
+	"""Translate the queued photos. Stage two's worker — see image_stage.py.
+
+	Returns {"images": [{source_url, url, note}, ...], "image_tokens": 0}; a photo
+	that failed comes back with url=None and a note, so one bad photo costs one
+	photo rather than the whole product.
+
+	The photos go through concurrently. Each is an independent call to a service
+	that fetches, rewrites and returns an image — slow, and slow in parallel just
+	as well.
+	"""
+	ak = frappe.conf.get(_ALPHASHOP_AK_KEY)
+	sk = frappe.conf.get(_ALPHASHOP_SK_KEY)
+	if not ak or not sk:
+		frappe.throw(
+			f"Image translation is not configured (set {_ALPHASHOP_AK_KEY} and {_ALPHASHOP_SK_KEY})."
+		)
 	base_url = frappe.conf.get(_ALPHASHOP_BASE_URL_KEY) or _ALPHASHOP_BASE_URL
 
+	# Resolved on this thread: expanding a local File path needs the site context.
+	sources = [(url, images.public_image_url(url)) for url in work["urls"]]
+
+	with ThreadPoolExecutor(max_workers=min(_RENDER_CONCURRENCY, len(sources) or 1)) as pool:
+		results = list(
+			pool.map(lambda pair: _try_translate(pair[1], ak, sk, base_url), sources)
+		)
+
 	out = []
-	for url in urls[:_MAX_TRANSLATED_IMAGES]:
-		try:
-			# alphashop fetches the image itself, so hand it an absolute URL.
-			translated_url = _alphashop_translate_image(
-				images.public_image_url(url), ak, sk, base_url
-			)
-			# Re-host the result: alphashop's URL is theirs and may expire, and we want
-			# the reviewed listing to keep working regardless.
-			out_bytes, out_media_type = images.fetch_image_bytes(translated_url)
-			hosted = images.save_public_image(
-				"listing-translated", out_bytes, out_media_type, default_ext=".jpg"
-			)
-			out.append({"source_url": url, "url": hosted, "note": None})
-		except Exception as exc:
-			# One bad photo must not sink the rest of the enrichment.
+	for (url, _public), (payload, error) in zip(sources, results, strict=True):
+		if error:
+			# Logged here rather than in the worker thread: frappe.log_error needs
+			# the request context that only this thread has.
 			frappe.log_error(
 				title="Shopify listing: image translation failed",
-				message=f"{url}\n{frappe.get_traceback()}",
+				message=f"{item_code} / {url}\n{error}",
 			)
 			out.append({
 				"source_url": url,
 				"url": None,
-				"note": f"Translation failed: {exc}"[:200],
+				"note": f"Translation failed: {error}"[:200],
 			})
+			continue
 
-	result = {"images": out}
-	skipped = len(urls) - len(out)
-	if skipped > 0:
-		result["note"] = (
-			f"{skipped} further photo(s) were not translated: this product has more "
-			f"than the {_MAX_TRANSLATED_IMAGES}-photo per-run cap. Record this in notes."
+		out_bytes, out_media_type = payload
+		# Saving writes a File row, so it stays on this thread too.
+		hosted = images.save_public_image(
+			"listing-translated", out_bytes, out_media_type, default_ext=".jpg"
 		)
-	return result
+		out.append({"source_url": url, "url": hosted, "note": None})
+
+	return {"images": out, "image_tokens": 0}
+
+
+def _try_translate(public_url, ak, sk, base_url):
+	"""One photo, in a worker thread. Returns (payload, error) — never raises.
+
+	Both the translate call and the fetch of its result are pure HTTP, so both
+	belong here; nothing in this function touches Frappe, which has no context in
+	a worker thread. Re-hosting the bytes is the caller's job.
+	"""
+	try:
+		# alphashop fetches the image itself, so hand it an absolute URL.
+		translated_url = _alphashop_translate_image(public_url, ak, sk, base_url)
+		# Re-host the result: alphashop's URL is theirs and may expire, and we want
+		# the reviewed listing to keep working regardless.
+		return images.fetch_image_bytes(translated_url), None
+	except Exception as exc:
+		return None, str(exc)
