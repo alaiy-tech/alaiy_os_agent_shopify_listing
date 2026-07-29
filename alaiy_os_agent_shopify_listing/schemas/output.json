@@ -2,122 +2,65 @@
  "type": "object",
  "additionalProperties": false,
  "properties": {
-  "category": {
-   "type": "string",
-   "enum": ["Jewelry", "Watches", "Accessories"],
-   "description": "The detected product category. Drives which attributes are mandatory."
-  },
-  "brand": {
-   "type": "string",
-   "description": "Brand / maker (e.g. 'Roberto Coin'). Reuse an existing brand from get_reference_values when it matches; empty string if unknown."
-  },
   "title": {
    "type": "string",
-   "description": "Product title in Solist house style: Brand + Product Type + key spec (e.g. 'Roberto Coin Obelisco 18K Yellow Gold Diamond Bracelet'). Include the supplier reference/model number at the end if present."
+   "description": "The product title, for the listing's `listing_title`. It must READ naturally and at the same time contain the words a shopper would actually type to find this product — the product type and its one or two defining specs, in the shopper's own vocabulary. Front-load the most searched term. No keyword stuffing, no repetition, no ALL CAPS, no promotional words."
   },
   "description": {
    "type": "string",
-   "description": "Editorial product description, 2-4 short paragraphs of plain text (no HTML, no markdown). Luxury tone matching The Solist: evocative but factual. Never invent specifications not supported by the data or images."
+   "description": "The product description, for the listing's `listing_description`. 2-4 short paragraphs of plain text (no HTML, no markdown). Say what the product is, what it is made of, how it is used, and what is included. The search terms a shopper would use must appear naturally in the prose — worked into real sentences, never listed or repeated for their own sake. Never invent specifications not supported by the data or the photos."
   },
-  "bullet_points": {
-   "type": "array",
-   "items": { "type": "string" },
-   "minItems": 3,
-   "description": "3-8 concise selling-point / spec bullets (plain text, no leading symbol). Each states one concrete detail a shopper cares about."
-  },
-  "seo_title": {
+  "category": {
    "type": "string",
-   "description": "SEO page title, <= 70 characters, front-loaded with brand + product type."
+   "description": "The product's category, for the listing's `listing_category`. Reuse a category from get_reference_values VERBATIM when one applies — it is a link to an existing Shopify Category, so a new spelling of an existing category is a broken value, and get_reference_values shows you the ones this store already uses. Only propose a different one when none of them genuinely fits, name it in the full Shopify taxonomy style, and say so in notes. Empty string if it cannot be determined."
   },
-  "seo_description": {
+  "product_type": {
    "type": "string",
-   "description": "SEO meta description, <= 160 characters, compelling and keyword-rich."
-  },
-  "seo_keywords": {
-   "type": "array",
-   "items": { "type": "string" },
-   "description": "5-15 SEO keywords / search phrases relevant to this product."
-  },
-  "shopify_tags": {
-   "type": "array",
-   "items": { "type": "string" },
-   "description": "Shopify tags for filtering/merchandising. Reuse existing tags from get_reference_values where they apply; cover category, type, brand, material, gemstone, collection, gender as relevant."
-  },
-  "shopify_category": {
-   "type": "string",
-   "description": "Suggested Shopify Standard Product Taxonomy category name (e.g. 'Apparel & Accessories > Jewelry > Bracelets'). Empty string if unsure."
+   "description": "The product type, for the listing's `listing_product_type` — the specific noun for what this product IS (e.g. 'Bracelet', 'Backpack', 'Fountain Pen'), not a category path. Reuse an existing product type from get_reference_values when one fits."
   },
   "attributes": {
    "type": "object",
-   "additionalProperties": false,
-   "description": "Structured attributes. Fill every field you can confidently determine from the description and photos for the detected category; omit or leave empty the ones that do not apply or cannot be determined (and list those you would expect but cannot fill in needs_review). Respect units: dimensions >1in in inches else mm; weight in grams; case size in mm; water resistance in metres.",
+   "additionalProperties": { "type": "string" },
+   "description": "Structured product attributes as name -> value, which become the listing's Shopify metafields on publish. The named properties below are the ones nearly every listing needs; your instructions may name more, and unless they say otherwise you may ALSO add any other attribute that genuinely applies, using a lower_snake_case key and a plain-text value. Reuse an existing attribute key from get_reference_values when it means the same thing. Only include an attribute you can support from the product text or the photos. Always state the unit inside the value.",
    "properties": {
-    "material": { "type": "string", "description": "e.g. '18K Yellow Gold', 'Stainless Steel'." },
-    "color": { "type": "string" },
-    "features": { "type": "string", "description": "Notable features, comma-separated." },
-    "dimensions": { "type": "string", "description": ">1 inch in inches, <1 inch in mm." },
-    "measurement": { "type": "string", "description": "e.g. 'Length: 7\"; Width: 15mm'." },
-    "weight": { "type": "string", "description": "In grams, e.g. '44 g' (suitcases in pounds)." },
-    "size": { "type": "string", "description": "Ring size etc. — millimetres for ring size." },
-    "style": { "type": "string", "description": "Style classification, e.g. 'Link', 'Tennis'." },
-    "manufactured_in": { "type": "string", "description": "Country of origin." },
-    "brand_packaging": { "type": "string", "description": "Original box/pouch supplied? e.g. 'Pouch', 'Full set'." },
-    "papers": { "type": "string", "description": "Authentication papers / certificates: 'Yes'/'No' or description." },
-    "backstory": { "type": "string", "description": "Short condition/provenance narrative, e.g. 'Pristine Display — Handled, Never Owned'." },
-    "clasp_type": { "type": "string", "description": "Watches. 'Deployant' or 'Tang'." },
-    "back_type": { "type": "string", "description": "Jewelry, earrings only (e.g. 'Hinged', 'Post back', 'French clip')." },
-    "gemstones": { "type": "string", "description": "Format: 'Diamond 1.68 ct. tw.'. Mandatory for Jewelry; optional for Watches/Accessories." },
-    "color_and_clarity": { "type": "string", "description": "Diamond quality, any category, only if the product includes diamonds, e.g. 'Color: G-H; Clarity: VS-SI1'." },
-    "nib_size": { "type": "string", "description": "Accessories, fountain pens only: 'Medium (M)', 'Fine (F)', 'Extra Fine (EF)', 'Broad (B)'." },
-    "movement": { "type": "string", "description": "Watches, e.g. 'Automatic', 'Quartz'." },
-    "case_size": { "type": "string", "description": "Watches, in mm." },
-    "dial_color": { "type": "string", "description": "Watches." },
-    "water_resistance": { "type": "string", "description": "Watches, in metres." },
-    "case_back": { "type": "string", "description": "Watches, e.g. 'Solid', 'Exhibition'." },
-    "strap": { "type": "string", "description": "Watches, e.g. 'Leather', 'Steel Bracelet'." },
-    "complications": { "type": "string", "description": "Watches, e.g. 'Date, Chronograph'." }
+    "material": { "type": "string", "description": "What the product is made of. Include composition percentages when given." },
+    "color": { "type": "string", "description": "Colour name. List all available colours comma-separated when the product has colour variants." },
+    "size": { "type": "string", "description": "Size or size range. Say which scale when it is regional." },
+    "dimensions": { "type": "string", "description": "Measurements, with the unit stated in the value." },
+    "weight": { "type": "string", "description": "Weight, with the unit stated in the value." },
+    "style": { "type": "string", "description": "Style classification." }
    }
   },
   "images": {
    "type": "array",
-   "description": "Generated editorial shots from generate_product_images, in the order: hero, detail, angle, lifestyle, scale. Copy the tool result's {kind, brief, url} entries verbatim. Empty if no product evidence was available at all; individual entries may have url=null if image generation wasn't configured — note that in needs_review/notes instead of blocking the rest of the listing.",
-   "maxItems": 5,
+   "description": "Images produced by the image step, for the listing's `images` table, in the order the tool returned them — copy its result entries verbatim. An empty array when no image step ran, when the product has no photos, or when the per-request image toggle was off. An entry whose result URL is null means that image could not be produced; record it in notes rather than blocking the rest of the listing.",
    "items": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
-     "kind": {
-      "type": "string",
-      "enum": ["hero", "detail", "angle", "lifestyle", "scale"],
-      "description": "Which shot this is."
-     },
-     "brief": {
-      "type": "string",
-      "description": "The exact prompt passed to generate_product_images for this shot."
-     },
-     "url": {
-      "type": ["string", "null"],
-      "description": "The file url returned for this shot, or null if it could not be generated."
-     }
-    },
-    "required": ["kind", "brief", "url"]
+     "kind": { "type": "string", "description": "What this image is, in the vocabulary your instructions give." },
+     "source_url": { "type": "string", "description": "The input photo this image was derived from, when there was one." },
+     "url": { "type": ["string", "null"], "description": "The resulting image, or null if it could not be produced." },
+     "brief": { "type": "string", "description": "The instruction used to produce this image, where the image step takes one." },
+     "note": { "type": ["string", "null"], "description": "Why this image was skipped or failed, when applicable." }
+    }
    }
   },
   "needs_review": {
    "type": "array",
    "items": { "type": "string" },
-   "description": "Human-readable names of mandatory-for-category fields that could NOT be confidently filled and must be completed by the admin before publish (e.g. 'Water Resistance', 'Papers')."
+   "description": "Human-readable names of fields that could NOT be confidently filled and must be completed by the admin before publish (e.g. 'Material', 'Product Type')."
   },
   "confidence": {
    "type": "string",
    "enum": ["high", "medium", "low"],
-   "description": "Overall confidence in the enrichment given the quality of the source data and images."
+   "description": "Overall confidence in the enrichment given the quality of the source data and photos."
   },
   "notes": {
    "type": "array",
    "items": { "type": "string" },
-   "description": "Anything the admin should know: assumptions made, ambiguities, or data conflicts between the text and the photos."
+   "description": "Anything the admin should know: assumptions made, ambiguities, a proposed new category, or conflicts between the product text and the photos."
   }
  },
- "required": ["category", "title", "description", "bullet_points", "attributes", "images", "needs_review", "confidence"]
+ "required": ["title", "description", "category", "product_type", "attributes", "images", "needs_review", "confidence"]
 }

@@ -1,7 +1,8 @@
-// Adds an "Enrich" button to the Item form that deep-links to the Listing
-// Enrichment agent (the run-agent page) with this Item pre-selected. The page
-// reads frappe.route_options on show (see run_agent.js#apply_route_options)
-// and fills the Item dropdown, so the user lands ready to click "Enrich".
+// Adds an "Enrich" button to the Item form that deep-links to the run-agent page
+// with this Item pre-selected. The page reads frappe.route_options on show (see
+// run_agent.js#apply_route_options) and fills the Item dropdown, so the user lands
+// ready to click "Enrich" — and picks up whichever listing agent the site has
+// registered, so nothing here names one.
 //
 // Loaded via doctype_js in this app's hooks.py — no change to the Item doctype
 // or to alaiy_os itself.

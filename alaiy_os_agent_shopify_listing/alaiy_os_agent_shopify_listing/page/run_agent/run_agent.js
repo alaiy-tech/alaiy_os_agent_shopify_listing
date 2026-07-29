@@ -1,28 +1,33 @@
-// Run Agent — Listing Enrichment. Implements docs/listing-agent-ui.md: the
-// Auto/Manual mode toggle, the enrich flow (idle -> loading -> done), the
-// loader, and the side-by-side Original/Generated comparison.
+// Run Agent — the Shopify listing agent. Implements docs/listing-agent-ui.md: the
+// Auto/Manual mode toggle, the enrich flow (idle -> loading -> done), the loader,
+// and the side-by-side Original/Generated comparison.
 //
 // Auto mode's enrich flow calls the real agent engine (alaiy_os.api.agents.
-// run_agent/get_run) — it reads the selected Item's actual data and photos
-// (or the given image_url) and the "Generated Listing" panel shows genuine
-// AI output, polled until the run finishes. The "Original Listing" panel is
-// populated from a plain frappe.db.get_value on the same Item, fetched
-// alongside the run, so "Before" reflects what's actually in the DB rather
-// than placeholder text. Manual mode stays a plain form with no agent
-// involvement at all — that is by design, not a shortcut.
+// run_agent/get_run) — it reads the selected Item's actual data and photos (or the
+// given image_url) and the "Generated Listing" panel shows genuine AI output,
+// polled until the run finishes. The "Original Listing" panel is populated from a
+// plain frappe.db.get_value on the same Item, fetched alongside the run, so
+// "Before" reflects what's actually in the DB rather than placeholder text. Manual
+// mode stays a plain form with no agent involvement at all — that is by design,
+// not a shortcut.
 //
-// The "Enrich images" toggle is passed to the agent as a `generate_images`
-// flag in the payload; when off, the agent skips generate_product_images (see
-// prompts/system.md). Any images the agent does return are shown as thumbnails
-// in the Generated Listing panel. An "Enrich" button on the Item form
-// (public/js/item_enrich.js) deep-links here with the item pre-selected via
+// The page is generic: it does not know an agent_id, and its per-request toggles are
+// rendered from whatever the agent's tools declare (api.get_listing_agent ->
+// input_options), each relayed into the run payload under its own fieldname. So
+// "generate images" and "translate images" both appear here without this file
+// knowing either exists.
+//
+// Any images the agent returns are shown as thumbnails in the Generated Listing
+// panel — as a before/after pair when an existing photo was reworked, as a
+// single captioned tile when it produced a new one. An "Enrich" button on the Item
+// form (public/js/item_enrich.js) deep-links here with the item pre-selected via
 // frappe.route_options.
 //
 // Colors/fonts/radii/shadows all come from this site's own OS Theme Settings
 // tokens (--s-*, see run_agent.css) rather than the spec doc's literal hex
 // values and Google Fonts — same design system as the rest of Alaiy OS.
 
-const AGENT_ID = "listing_enrichment";
+const AGENT_METHOD = "alaiy_os_agent_shopify_listing.api.get_listing_agent";
 const POLL_INTERVAL_MS = 2500;
 
 // Kept at module scope so on_page_show (fired on every visit) can reach the
@@ -52,12 +57,29 @@ class RunAgentPage {
 		this.state = {
 			mode: "auto", // "auto" | "manual"
 			enrichState: "idle", // "idle" | "loading" | "done"
-			enrichImages: true, // "Enrich images" toggle — on = agent generates images
+			// One entry per declared input option, keyed by its fieldname. Filled
+			// once the agent lands.
+			options: {},
 			notesOpen: true,
 			origCollapsed: false,
 			genCollapsed: false,
 		};
+		this.agent = null;
 		this.make();
+	}
+
+	// The agent decides the card's title and the toggles, so Auto mode is rendered
+	// only once it has arrived. Manual mode involves no agent at all and is rendered
+	// immediately.
+	load_agent() {
+		return frappe.xcall(AGENT_METHOD).catch(() => null);
+	}
+
+	init_options() {
+		this.state.options = {};
+		((this.agent && this.agent.input_options) || []).forEach((opt) => {
+			this.state.options[opt.fieldname] = opt.default === undefined ? false : !!opt.default;
+		});
 	}
 
 	make() {
@@ -83,9 +105,15 @@ class RunAgentPage {
 		this.$auto_body = this.$root.find('.ra-mode-body[data-mode="auto"]');
 		this.$manual_body = this.$root.find('.ra-mode-body[data-mode="manual"]');
 
-		this.render_auto();
 		this.render_manual();
 		this.bind_mode_toggle();
+
+		this.$auto_body.html(`<div class="ra-card frappe-card">${__("Loading…")}</div>`);
+		this.load_agent().then((agent) => {
+			this.agent = agent;
+			this.init_options();
+			this.render_auto();
+		});
 	}
 
 	bind_mode_toggle() {
@@ -102,13 +130,55 @@ class RunAgentPage {
 
 	// ── AUTO MODE ────────────────────────────────────────────────────────────
 
+	// One toggle per option the agent's tools declare. The page never decides a
+	// toggle's meaning — it relays the value under the tool's own fieldname and
+	// the tool behind it enforces the rule.
+	toggles_html() {
+		const options = (this.agent && this.agent.input_options) || [];
+		return options
+			.map(
+				(opt) => `
+			<div class="ra-toggle-row">
+				<label class="ra-toggle">
+					<input type="checkbox" class="ra-option-toggle"
+					       data-fieldname="${frappe.utils.escape_html(opt.fieldname)}"
+					       ${this.state.options[opt.fieldname] ? "checked" : ""}>
+					<span class="ra-toggle-track"><span class="ra-toggle-thumb"></span></span>
+					<span class="ra-toggle-label">
+						${frappe.utils.icon("image", "xs")} ${frappe.utils.escape_html(opt.label || opt.fieldname)}
+					</span>
+				</label>
+				${
+					opt.description
+						? `<p class="ra-field-help">${frappe.utils.escape_html(opt.description)}</p>`
+						: ""
+				}
+			</div>`
+			)
+			.join("");
+	}
+
 	render_auto() {
+		if (!this.agent) {
+			this.$auto_body.html(`
+				<div class="ra-callout ra-callout--error">
+					<div class="ra-callout-title">
+						${frappe.utils.icon("triangle-alert", "sm")} ${__("No listing agent is available")}
+					</div>
+					<p>${__(
+						"The listing agent is not registered or is disabled on this site. Check OS Agent Registry, or run a migrate to register it."
+					)}</p>
+				</div>
+			`);
+			return;
+		}
+
 		this.$auto_body.html(`
 			<div class="ra-card ra-enrich-card frappe-card">
 				<div class="ra-card-header">
-					<span class="ra-icon-tile">${frappe.utils.icon("sparkles", "md")}</span>
+					<span class="ra-icon-tile">${frappe.utils.icon(this.agent.icon || "sparkles", "md")}</span>
 					<div class="ra-card-header-text">
-						<h2>${__("Listing Enrichment")}</h2>
+						<h2>${frappe.utils.escape_html(this.agent.agent_name)}</h2>
 						<p>${__("Fill in what you have, then generate a Shopify-ready listing.")}</p>
 					</div>
 				</div>
@@ -117,6 +187,7 @@ class RunAgentPage {
 					${frappe.utils.icon("info", "xs")}
 					<span>${__("Provide at least one: Item or Image URL.")}</span>
 				</div>
+
 
 				<div class="ra-bordered-block">
 					<div class="ra-field-grid">
@@ -149,14 +220,7 @@ class RunAgentPage {
 					</div>
 				</div>
 
-				<div class="ra-toggle-row">
-					<label class="ra-toggle">
-						<input type="checkbox" id="ra-enrich-images" ${this.state.enrichImages ? "checked" : ""}>
-						<span class="ra-toggle-track"><span class="ra-toggle-thumb"></span></span>
-						<span class="ra-toggle-label">${frappe.utils.icon("image", "xs")} ${__("Enrich images")}</span>
-					</label>
-					<p class="ra-field-help">${__("Generate editorial product images for this listing. Turn off for a faster, text-only enrichment.")}</p>
-				</div>
+				${this.toggles_html()}
 
 				<div class="ra-enrich-actions">
 					<button type="button" class="ra-enrich-btn">
@@ -171,13 +235,13 @@ class RunAgentPage {
 
 		this.$image_url = this.$auto_body.find("#ra-image-url");
 		this.$notes = this.$auto_body.find("#ra-notes");
-		this.$enrich_images = this.$auto_body.find("#ra-enrich-images");
 		this.$enrich_btn = this.$auto_body.find(".ra-enrich-btn");
 		this.$flow_area = this.$auto_body.find(".ra-flow-area");
 
-		this.$enrich_images.on("change", (e) => {
-			this.state.enrichImages = e.target.checked;
+		this.$auto_body.find(".ra-option-toggle").on("change", (e) => {
+			this.state.options[$(e.target).data("fieldname")] = e.target.checked;
 		});
+
 
 		// Real Link control (searchable dropdown against actual Item records
 		// in the DB, with the standard Frappe "create a new Item" affordance)
@@ -211,16 +275,25 @@ class RunAgentPage {
 	// Prefill from frappe.route_options (set by public/js/item_enrich.js before
 	// routing here). Switches to Auto mode and selects the item; the user still
 	// clicks Enrich themselves.
+	//
+	// Auto mode renders only once the agent has loaded, so a route option can
+	// land before the Item control exists. It is stashed rather than dropped, and
+	// render_auto replays it — otherwise arriving from the Item form would silently
+	// lose the item on a cold page.
 	apply_route_options() {
 		const opts = frappe.route_options;
-		if (!opts || !opts.item_code) return;
-		frappe.route_options = null;
+		if (opts && opts.item_code) {
+			frappe.route_options = null;
+			this.pending_item_code = opts.item_code;
+		}
+		if (!this.pending_item_code) return;
 
 		if (this.state.mode !== "auto") {
 			this.$root.find('.ra-mode-btn[data-mode="auto"]').trigger("click");
 		}
 		if (this.item_code_control) {
-			this.item_code_control.set_value(opts.item_code);
+			this.item_code_control.set_value(this.pending_item_code);
+			this.pending_item_code = null;
 		}
 	}
 
@@ -248,7 +321,14 @@ class RunAgentPage {
 			return;
 		}
 
-		this.start_enrich({ item_code, image_url, generate_images: this.state.enrichImages });
+		const notes = (this.$notes.val() || "").trim();
+		const inputs = { item_code, image_url };
+		if (notes) inputs.notes = notes;
+		// Each declared toggle goes in under its own fieldname; the agent's prompt
+		// and the tool behind it decide what to do with it.
+		Object.assign(inputs, this.state.options);
+
+		this.start_enrich(inputs);
 	}
 
 	start_enrich(inputs) {
@@ -261,10 +341,17 @@ class RunAgentPage {
 
 		// Fetched alongside the run (not awaited before starting it) so the
 		// "Original Listing" panel has real data by the time the run finishes
-		// — this doesn't block/slow the actual enrichment.
+		// — this doesn't block/slow the actual enrichment. Read from the Shopify
+		// Product Listing, the same doctype the agent reads and writes back onto, so
+		// Before/After compare the same fields.
 		if (inputs.item_code) {
 			frappe.db
-				.get_value("Item", inputs.item_code, ["item_name", "description", "brand"])
+				.get_value("Shopify Product Listing", inputs.item_code, [
+					"listing_title",
+					"listing_description",
+					"listing_category",
+					"listing_product_type",
+				])
 				.then((r) => {
 					this.original_item = (r && r.message) || null;
 				});
@@ -272,7 +359,7 @@ class RunAgentPage {
 
 		frappe.call({
 			method: "alaiy_os.api.agents.run_agent",
-			args: { agent: AGENT_ID, payload: inputs },
+			args: { agent: this.agent.agent_id, payload: inputs },
 			callback: (r) => {
 				if (!r.message || !r.message.run) {
 					this.render_run_error(__("The agent did not return a run id."), null);
@@ -379,9 +466,10 @@ class RunAgentPage {
 	}
 
 	render_loader() {
-		const sub = this.state.enrichImages
-			? __("Reading supplier data and photos, generating images")
-			: __("Reading supplier data and photos");
+		// Any toggle being on means there is an image step to wait for as well.
+		const sub = Object.values(this.state.options).some(Boolean)
+			? __("Reading product data and photos, working on images")
+			: __("Reading product data and photos");
 		this.$flow_area.removeClass("is-visible").html(`
 			<div class="ra-loader-card">
 				${this.spinner(44)}
@@ -420,33 +508,50 @@ class RunAgentPage {
 			</div>`
 			: "";
 
-		const bullet_values = listing.bullet_points && listing.bullet_points.length ? listing.bullet_points : ["", "", ""];
-		const bullets_html = bullet_values
-			.map(
-				(b, i) => `<input type="text" class="form-control input-sm" value="${esc(b)}" placeholder="${__("Selling point {0}", [i + 1])}">`
-			)
-			.join("");
+		// The attributes object is open, so render whatever is actually in it rather
+		// than a fixed list of rows.
+		const attr_rows = (obj) => {
+			const entries = Object.entries(obj || {}).filter(([, v]) => v !== "" && v != null);
+			if (!entries.length) return `<li><span>—</span><span></span></li>`;
+			return entries
+				.map(
+					([k, v]) =>
+						`<li><span>${esc(k.replace(/_/g, " "))}</span><span>${esc(v)}</span></li>`
+				)
+				.join("");
+		};
 
-		// Editorial images returned by generate_product_images (empty when the
-		// "Enrich images" toggle was off; a tile may have url=null if image
-		// generation wasn't configured — shown as a placeholder rather than hidden).
+		// Images the image step returned — empty when the agent has none, when
+		// the toggle was off, or when the product had no photos. A tile whose result
+		// URL is null (not configured, or the call failed) is shown as a placeholder
+		// rather than hidden, so a missing image is visible.
+		//
+		// Both shapes the image tools produce render here: `source_url` present means
+		// an existing photo was reworked, so the source is shown alongside the
+		// result; otherwise it is a single tile.
 		const cap = (s) => (s ? String(s).charAt(0).toUpperCase() + String(s).slice(1) : "");
 		const images = (listing.images || []).filter(Boolean);
+		const tile = (url, label) =>
+			`<div class="ra-image-tile">
+				${
+					url
+						? `<a href="${esc(url)}" target="_blank" rel="noopener"><img src="${esc(url)}" alt="${esc(label)}" loading="lazy"></a>`
+						: `<div class="ra-image-placeholder">${frappe.utils.icon("image", "sm")}</div>`
+				}
+				<div class="ra-image-kind">${esc(label)}</div>
+			</div>`;
 		const images_html = images.length
 			? `<div class="ra-field-block">
-					<div class="control-label">${__("Generated Images")}</div>
+					<div class="control-label">${__("Images")}</div>
 					<div class="ra-images-grid">
 						${images
-							.map(
-								(im) => `<div class="ra-image-tile">
-									${
-										im.url
-											? `<a href="${esc(im.url)}" target="_blank" rel="noopener"><img src="${esc(im.url)}" alt="${esc(im.kind)}" loading="lazy"></a>`
-											: `<div class="ra-image-placeholder">${frappe.utils.icon("image", "sm")}</div>`
-									}
-									<div class="ra-image-kind">${esc(cap(im.kind))}</div>
-								</div>`
-							)
+							.map((im) => {
+								const out = im.url || null;
+								const label = im.kind ? cap(im.kind) : __("Result");
+								return im.source_url
+									? tile(im.source_url, __("Source")) + tile(out, label)
+									: tile(out, label);
+							})
 							.join("")}
 					</div>
 				</div>`
@@ -467,24 +572,24 @@ class RunAgentPage {
 					</div>
 					<div class="ra-compare-body">
 						<div class="ra-field-block">
-							<div class="control-label">${__("Brand")}</div>
-							<div class="ra-static-value">${orig.brand ? esc(orig.brand) : "—"}</div>
-						</div>
-						<div class="ra-field-block">
 							<div class="control-label">${__("Title")}</div>
 							<div class="ra-static-value">${orig_title ? esc(orig_title) : "—"}</div>
 						</div>
 						<div class="ra-field-block">
 							<div class="control-label">${__("Description")}</div>
-							<div class="ra-static-value">${orig.description ? esc(strip_html(orig.description)) : "—"}</div>
+							<div class="ra-static-value">${
+								orig.listing_description ? esc(strip_html(orig.listing_description)) : "—"
+							}</div>
 						</div>
 						<div class="ra-field-block">
-							<div class="control-label">${__("Attributes")}</div>
-							<ul class="ra-attr-list">
-								<li><span>${__("Material")}</span><span>—</span></li>
-								<li><span>${__("Dimensions")}</span><span>—</span></li>
-								<li><span>${__("Color")}</span><span>—</span></li>
-							</ul>
+							<div class="control-label">${__("Category")}</div>
+							<div class="ra-static-value">${orig.listing_category ? esc(orig.listing_category) : "—"}</div>
+						</div>
+						<div class="ra-field-block">
+							<div class="control-label">${__("Product Type")}</div>
+							<div class="ra-static-value">${
+								orig.listing_product_type ? esc(orig.listing_product_type) : "—"
+							}</div>
 						</div>
 					</div>
 				</div>
@@ -506,10 +611,6 @@ class RunAgentPage {
 						${needs_review_html}
 
 						<div class="ra-field-block">
-							<div class="control-label">${__("Brand")}</div>
-							<input type="text" class="form-control" value="${esc(listing.brand)}" placeholder="${__("Detected brand")}">
-						</div>
-						<div class="ra-field-block">
 							<div class="control-label">${__("Title")}</div>
 							<input type="text" class="form-control" value="${esc(listing.title)}" placeholder="${__("Generated title")}">
 						</div>
@@ -518,8 +619,12 @@ class RunAgentPage {
 							<textarea class="form-control" rows="4" placeholder="${__("Generated description")}">${esc(listing.description)}</textarea>
 						</div>
 						<div class="ra-field-block">
-							<div class="control-label">${__("Bullet Points")}</div>
-							<div class="ra-bullet-list">${bullets_html}</div>
+							<div class="control-label">${__("Product Type")}</div>
+							<input type="text" class="form-control" value="${esc(listing.product_type)}" placeholder="${__("Detected product type")}">
+						</div>
+						<div class="ra-field-block">
+							<div class="control-label">${__("Attributes")}</div>
+							<ul class="ra-attr-list">${attr_rows(listing.attributes)}</ul>
 						</div>
 
 						${images_html}
@@ -556,11 +661,10 @@ class RunAgentPage {
 				<div class="ra-section-title">${__("Basics")}</div>
 				<div class="ra-bordered-block">
 					<div class="ra-field-grid">
-						<div class="ra-field-group"><label>${__("Brand")}</label><input type="text" class="form-control"></div>
 						<div class="ra-field-group"><label>${__("SKU / Item")}</label><input type="text" class="form-control"></div>
+						<div class="ra-field-group"><label>${__("Product Type")}</label><input type="text" class="form-control"></div>
 						<div class="ra-field-group ra-field-group--full"><label>${__("Title")}</label><input type="text" class="form-control"></div>
 						<div class="ra-field-group"><label>${__("Category")}</label><input type="text" class="form-control"></div>
-						<div class="ra-field-group"><label>${__("Price")}</label><input type="text" class="form-control"></div>
 					</div>
 				</div>
 
@@ -579,14 +683,6 @@ class RunAgentPage {
 					<div class="ra-field-group ra-field-group--full">
 						<label>${__("Description")}</label>
 						<textarea class="form-control" rows="5"></textarea>
-					</div>
-					<div class="ra-field-group ra-field-group--full">
-						<label>${__("Bullet Points")}</label>
-						<div class="ra-bullet-list">
-							<input type="text" class="form-control">
-							<input type="text" class="form-control">
-							<input type="text" class="form-control">
-						</div>
 					</div>
 				</div>
 

@@ -4,5 +4,5 @@
 from frappe.model.document import Document
 
 
-class EnrichedListing(Document):
+class ShopifyEnrichedListingImage(Document):
 	pass

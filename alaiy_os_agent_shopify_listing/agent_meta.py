@@ -1,90 +1,100 @@
 # Copyright (c) 2026, Alaiy and contributors
 # For license information, please see license.txt
 """
-Single source of truth for this agent's registration metadata — the agent
-equivalent of a connector's connector_meta.py. Consumed by setup/install.py →
-upserted into alaiy_os's OS Agent Registry (and its OS Agent Tool child rows).
+The Shopify listing agent: its prompt, its schema, its tools — and how a customer
+app overrides the prompt.
 
-This agent — "Listing Enrichment" — turns raw supplier product data (an
-ERPNext Item created from a supplier CSV) into a structured, Shopify-ready
-listing for The Solist: editorial title + description, bullet points, SEO
-fields, Shopify tags, and category-specific attributes. It READS the product's
-Shopify Product Listing and its images, RETURNS a JSON object, and (via the save_listing tool) persists
-that listing into its own Enriched Listing DocType in "Needs Review" status for
-admin review. It does not modify the listing (or the Item behind it) or
-publish to Shopify (that is
-the approval / connector step).
+There is ONE listing agent per site, `shopify_listing`. This app defines all of it.
+A customer app changes it by dropping a single markdown file at:
 
-Credentials are NOT stored here. Model access is provided by Alaiy OS core
-(the engine's anthropic_api_key) and any third-party keys/usage/billing are
-handled by a separate Alaiy service, not by this app.
+    <customer_app>/agents/shopify_listing.md
+
+Whatever is in that file is appended to the vanilla prompt below, so it says what is
+true of that store: who they are, their house style, their categories and
+attributes, and which image tool the agent should use. No registration, no hook, no
+config — the file being there is the whole mechanism.
+
+It may start with optional frontmatter, for the two things a prompt cannot express:
+
+    ---
+    model: claude-opus-4-8
+    description: Shown in the Agents hub.
+    ---
+    Everything from here down is appended to the vanilla prompt.
+
+All tools are registered on every site. The prompt decides which get called, which
+is why picking image translation over image generation is a sentence, not a setting.
 """
 
 import json
 from pathlib import Path
 
+import frappe
+
+_APP = "alaiy_os_agent_shopify_listing"
 _APP_DIR = Path(__file__).resolve().parent
 
+# Where a customer app puts its override, relative to its own package directory.
+OVERRIDE_PATH = ("agents", "shopify_listing.md")
 
-def _read(relpath):
+# Frontmatter keys we honour. Anything else in there is a typo, so say so.
+OVERRIDE_KEYS = ("model", "description")
+
+
+def read_text(relpath):
+	"""Read a file relative to THIS app's package directory."""
 	return (_APP_DIR / relpath).read_text(encoding="utf-8")
 
 
-# The enriched-listing schema. Used both as the agent's output_format schema and
-# as the `listing` argument schema for the save_listing tool, so a persisted row
-# is validated against exactly the shape the agent returns.
-_OUTPUT_SCHEMA = json.loads(_read("schemas/output.json"))
+# The one listing agent per site: the OS Agent Registry primary key, and what you
+# pass as `agent` to alaiy_os.api.agents.run_agent.
+AGENT_ID = "shopify_listing"
+AGENT_NAME = "Shopify Listing"
+AGENT_ICON = "sparkles"
+
+DEFAULT_MODEL = "claude-sonnet-5"
+DEFAULT_MAX_TURNS = 8
+DEFAULT_DESCRIPTION = (
+	"Generates a structured, Shopify-ready product listing from raw product data — "
+	"title, description, bullet points, SEO fields, Shopify tags and product "
+	"attributes — for admin review."
+)
+
+BASE_PROMPT = read_text("prompts/system.md")
+BASE_SCHEMA = json.loads(read_text("schemas/output.json"))
+
+_HANDLERS = f"{_APP}.tools.handlers"
+_IMAGE_GEN = f"{_APP}.tools.image_generation"
+_IMAGE_TRANS = f"{_APP}.tools.image_translation"
 
 
-agent_meta = {
-	# ── Identity (OS Agent Registry) ──────────────────────────────────────────
-	# agent_id is the primary key. Keep it stable across releases — changing it
-	# orphans run history and creates a second agent.
-	"agent_id": "listing_enrichment",
-	"agent_name": "Listing Enrichment",
-	"description": (
-		"Generates a structured, Shopify-ready product listing from raw supplier "
-		"data — editorial title and description, bullet points, SEO fields, "
-		"Shopify tags, and category-specific attributes — for admin review."
-	),
-	"icon": "sparkles",  # Lucide/Feather icon name, shown in the Agents hub
-	# Reached through the core Agents hub; no custom desk Page shipped here.
-	"page": None,
-	# No settings DocType: this app stores no credentials (see module docstring).
-	"settings_doctype": None,
+# ── the tools ─────────────────────────────────────────────────────────────────
+# Every tool the listing agent has, keyed by tool_id. All of them are registered on
+# every site; the agent's prompt is what decides which ones it actually calls. That
+# is why a customer override is only a prompt — telling the agent to translate
+# supplier photos rather than generate editorial shots needs no configuration.
+#
+# An entry may carry `input_option`, the per-request toggle the desk surfaces render
+# for it (see api.py).
+#
+# It is a function, not a constant, only because save_listing's `listing` argument is
+# the output schema itself.
 
-	# ── Engine config ─────────────────────────────────────────────────────────
-	# Opus for luxury-standard editorial copy and reliable attribute extraction
-	# from product photos. Admin-triggered and low-volume, so cost is not a
-	# concern; drop to claude-sonnet-5 if you want it cheaper/faster.
-	"model": "claude-opus-4-8",
-	"max_turns": 8,
-	"system_prompt": _read("prompts/system.md"),
-	# Schema-validated object: the enriched listing.
-	"output_format": "JSON",
-	"output_schema": _OUTPUT_SCHEMA,
 
-	# ── Tools (OS Agent Tool child rows) ──────────────────────────────────────
-	# handler: importable dotted path to a callable in this app.
-	# parameters_schema: JSON Schema (type: object) for the tool's arguments.
-	# connector: optional OS Connector Registry id this tool depends on; the
-	#            engine refuses to run the agent if that connector is missing.
-	#            None here — this agent only reads local data and returns JSON.
-	"tools": [
-		{
-			"tool_id": "get_product",
+def tool_catalog(output_schema):
+	return {
+		"get_product": {
 			"description": (
 				"Fetch a product's Shopify Product Listing by its item_code, "
-				"returning the listing's current data — title, description, "
-				"price, Shopify status, and variants (each variant's item code, "
-				"price, enabled flag) — together with its product photos as "
-				"images you can look at. ALWAYS call this first when the input "
-				"contains an item_code, and study the photos: they are the "
-				"primary evidence for material, gemstones, dial, strap, clasp, "
-				"earring back, style and other visual attributes. Each photo is "
-				"labelled with its source (Original vs. AI Enhanced)."
+				"returning the listing's current data — title, description, price, "
+				"Shopify status, and variants (each variant's item code, price, "
+				"enabled flag) — together with its product photos as images you can "
+				"look at. ALWAYS call this first when the input contains an item_code, "
+				"and study the photos: they are the primary evidence for material, "
+				"colour, pattern, construction, what is in the box, and any spec text "
+				"printed onto the image. Each photo is labelled with its source."
 			),
-			"handler": "alaiy_os_agent_shopify_listing.tools.handlers.get_product",
+			"handler": f"{_HANDLERS}.get_product",
 			"parameters_schema": {
 				"type": "object",
 				"properties": {
@@ -95,36 +105,28 @@ agent_meta = {
 				},
 				"required": ["item_code"],
 			},
-			"connector": None,
 		},
-		{
-			"tool_id": "get_reference_values",
+		"get_reference_values": {
 			"description": (
-				"Return existing catalog vocabulary already in use on The Solist "
-				"store — known brands, product categories (item groups), Shopify "
-				"tags already applied to other products, and Shopify locations. "
-				"Call this before finalising the brand, category, and shopify_tags "
-				"so your output stays consistent with existing listings instead of "
-				"inventing new variants of the same value."
+				"Return existing catalog vocabulary already in use on this store — "
+				"known brands, product categories (item groups), Shopify tags already "
+				"applied to other products, and Shopify locations. Call this before "
+				"finalising the brand, category, and shopify_tags so your output stays "
+				"consistent with existing listings instead of inventing new variants "
+				"of the same value."
 			),
-			"handler": "alaiy_os_agent_shopify_listing.tools.handlers.get_reference_values",
-			"parameters_schema": {
-				"type": "object",
-				"properties": {},
-			},
-			"connector": None,
+			"handler": f"{_HANDLERS}.get_reference_values",
+			"parameters_schema": {"type": "object", "properties": {}},
 		},
-		{
-			"tool_id": "view_image",
+		"view_image": {
 			"description": (
-				"Fetch an external image URL (e.g. an `image_url` given in the "
-				"input) and show it to you as an actual image, not just a string. "
-				"ALWAYS call this before writing anything if your only product "
-				"evidence is a URL rather than an item_code — you cannot "
-				"accurately describe, enrich, or generate imagery for a product "
-				"you have never looked at."
+				"Fetch an external image URL (e.g. an `image_url` given in the input) "
+				"and show it to you as an actual image, not just a string. ALWAYS call "
+				"this before writing anything if your only product evidence is a URL "
+				"rather than an item_code — you cannot accurately describe or enrich a "
+				"product you have never looked at."
 			),
-			"handler": "alaiy_os_agent_shopify_listing.tools.handlers.view_image",
+			"handler": f"{_HANDLERS}.view_image",
 			"parameters_schema": {
 				"type": "object",
 				"properties": {
@@ -135,34 +137,41 @@ agent_meta = {
 				},
 				"required": ["image_url"],
 			},
-			"connector": None,
 		},
-		{
-			"tool_id": "generate_product_images",
+		"generate_product_images": {
 			"description": (
 				"Generate the full editorial image set (hero, detail, angle, "
-				"lifestyle, scale) in ONE call — pass all 5 briefs together, in "
-				"that order. Whether images are actually produced is decided by "
-				"the tool itself, NOT by you: it generates ONLY when the product "
-				"has an original photo to edit AND generate_images is true, and "
-				"every shot is generated by editing that real photo — it never "
-				"invents a product from scratch. Pass `item_code` (for an "
-				"item_code run — the tool reads the listing's own photo) and "
-				"`generate_images` copied verbatim from the input (default "
-				"false). For a URL-only product, pass the real photo as "
-				"`reference_image_url` instead. Each brief must be a detailed, "
-				"self-contained prompt describing the exact product (material, "
-				"style, gemstone, setting) and the shot itself (framing, "
+				"lifestyle, scale) in ONE call — pass all 5 briefs together, in that "
+				"order. Whether images are actually produced is decided by the tool "
+				"itself, NOT by you: it generates ONLY when the product has an "
+				"original photo to edit AND generate_images is true, and every shot is "
+				"generated by editing that real photo — it never invents a product "
+				"from scratch. Pass `item_code` (for an item_code run — the tool reads "
+				"the listing's own photo) and `generate_images` copied verbatim from "
+				"the input (default false). For a URL-only product, pass the real "
+				"photo as `reference_image_url` instead. Each brief must be a "
+				"detailed, self-contained prompt describing the exact product "
+				"(material, style, gemstone, setting) and the shot itself (framing, "
 				"background, lighting) — the image model has no memory of the "
 				"conversation, only that brief and the reference photo. Returns "
-				"{images: [{kind, brief, url}, ...]}; copy that list verbatim "
-				"into the final `images` array. If it returns an empty list with "
-				"a note (no original photo, or the toggle is off), that is "
-				"expected — set images to [] and record the note. If image "
-				"generation isn't configured, each entry comes back with url=null "
-				"— do not retry, just include them as-is and note it."
+				"{images: [{kind, brief, url}, ...]}; copy that list verbatim into the "
+				"final `images` array. If it returns an empty list with a note (no "
+				"original photo, or the toggle is off), that is expected — set images "
+				"to [] and record the note. If image generation isn't configured, each "
+				"entry comes back with url=null — do not retry, just include them "
+				"as-is and note it."
 			),
-			"handler": "alaiy_os_agent_shopify_listing.tools.handlers.generate_product_images",
+			"handler": f"{_IMAGE_GEN}.generate_product_images",
+			"input_option": {
+				"fieldname": "generate_images",
+				"label": "Enrich images",
+				"description": (
+					"Generate the editorial image set for this listing by editing its "
+					"real photo. Costs money per image; turn off for a faster, "
+					"text-only enrichment."
+				),
+				"default": 0,
+			},
 			"parameters_schema": {
 				"type": "object",
 				"properties": {
@@ -191,48 +200,104 @@ agent_meta = {
 						"type": "string",
 						"description": (
 							"The item_code being enriched (= its Shopify Product "
-							"Listing name). The tool reads that listing's own "
-							"original photo and edits it; if the listing has no "
-							"photo, nothing is generated."
+							"Listing name). The tool reads that listing's own original "
+							"photo and edits it; if the listing has no photo, nothing "
+							"is generated."
 						),
 					},
 					"generate_images": {
 						"type": "boolean",
 						"description": (
-							"The per-request opt-in toggle, copied verbatim from "
-							"the input (default false). Images are produced only "
-							"when this is true AND an original photo exists."
+							"The per-request opt-in toggle, copied verbatim from the "
+							"input (default false). Images are produced only when this "
+							"is true AND an original photo exists."
 						),
 					},
 					"reference_image_url": {
 						"type": "string",
 						"description": (
-							"Only for a URL-only product with no item_code: the URL "
-							"of a real photo of this exact product, which every "
-							"shot is generated by editing. Ignored when item_code "
-							"resolves to a listing photo."
+							"Only for a URL-only product with no item_code: the URL of "
+							"a real photo of this exact product, which every shot is "
+							"generated by editing. Ignored when item_code resolves to a "
+							"listing photo."
 						),
 					},
 				},
 				"required": ["briefs"],
 			},
-			"connector": None,
 		},
-		{
-			"tool_id": "save_listing",
+		"translate_product_images": {
 			"description": (
-				"Persist the finished listing into the Enriched Listing DocType "
-				"for admin review. Call this ONCE as your FINAL action, after you "
-				"have assembled the complete listing (including the generated "
-				"images), passing the `item_code` and the exact same object you "
-				"are about to return as `listing`. It upserts by item_code — "
-				"re-running on the same product updates its row rather than "
-				"creating a duplicate — and lands the row in 'Needs Review' "
-				"status. After it returns, reply with the listing JSON as usual. "
-				"Skip this tool ONLY when there is no item_code (a URL-only "
-				"input), since the record is keyed to the product's item_code."
+				"Translate the text printed on the product's supplier photos into "
+				"English, via alphashop's image translation API. Call it ONCE for the "
+				"whole product. Whether images are actually translated is decided by "
+				"the tool itself, NOT by you: it runs ONLY when the product has photos "
+				"AND translate_images is true. Pass `item_code` (for an item_code run "
+				"— the tool reads the listing's own photos) and `translate_images` "
+				"copied verbatim from the input (default false). For a URL-only "
+				"product, pass the photo URLs as `image_urls` instead. Returns "
+				"{images: [{source_url, url, note}, ...]}; copy that list verbatim "
+				"into the final `images` array. If it returns an empty list with a "
+				"note (no photos, or the toggle is off), that is expected — set images "
+				"to [] and record the note. If image translation isn't configured, do "
+				"not retry: return each entry with url=null and note it."
 			),
-			"handler": "alaiy_os_agent_shopify_listing.tools.handlers.save_listing",
+			"handler": f"{_IMAGE_TRANS}.translate_product_images",
+			"input_option": {
+				"fieldname": "translate_images",
+				"label": "Translate product images",
+				"description": (
+					"Sends each supplier photo to the image translation service. Costs "
+					"money per image, and only works for photos reachable from the "
+					"public internet."
+				),
+				"default": 0,
+			},
+			"parameters_schema": {
+				"type": "object",
+				"properties": {
+					"item_code": {
+						"type": "string",
+						"description": (
+							"The item_code being enriched (= its Shopify Product "
+							"Listing name). The tool reads that listing's own photos; "
+							"if the listing has no photos, nothing is done."
+						),
+					},
+					"translate_images": {
+						"type": "boolean",
+						"description": (
+							"The per-request opt-in toggle, copied verbatim from the "
+							"input (default false). Images are translated only when "
+							"this is true AND the product has photos."
+						),
+					},
+					"image_urls": {
+						"type": "array",
+						"items": {"type": "string"},
+						"description": (
+							"Only for a URL-only product with no item_code: the photo "
+							"URLs to translate. Ignored when item_code resolves to a "
+							"listing with photos."
+						),
+					},
+				},
+			},
+		},
+		"save_listing": {
+			"description": (
+				"Persist the finished listing into the Shopify Enriched Listing "
+				"DocType for admin review. Call this ONCE as your FINAL action, after "
+				"you have assembled the complete listing (including any images), "
+				"passing the `item_code` and the exact same object you are about to "
+				"return as `listing`. It upserts by item_code — re-running on the same "
+				"product updates its row rather than creating a duplicate — and lands "
+				"the row in 'Needs Review' status. After it returns, reply with the "
+				"listing JSON as usual. Skip this tool ONLY when there is no item_code "
+				"(a URL-only input), since the record is keyed to the product's "
+				"item_code."
+			),
+			"handler": f"{_HANDLERS}.save_listing",
 			"parameters_schema": {
 				"type": "object",
 				"properties": {
@@ -240,11 +305,110 @@ agent_meta = {
 						"type": "string",
 						"description": "The item_code this listing is for (upsert key).",
 					},
-					"listing": _OUTPUT_SCHEMA,
+					"listing": output_schema,
 				},
 				"required": ["item_code", "listing"],
 			},
-			"connector": None,
 		},
-	],
-}
+	}
+
+# ── the customer override ─────────────────────────────────────────────────────
+
+
+def find_override():
+	"""
+	The installed app that overrides the listing agent, and its markdown file.
+
+	Discovery is just "does the file exist", so a customer app needs no hook and no
+	Python. Returns (app, Path) or (None, None).
+
+	Two apps overriding one agent is a mistake worth shouting about: their prompts
+	would silently concatenate in installed-app order.
+	"""
+	found = []
+	for app in frappe.get_installed_apps():
+		if app == _APP:
+			continue
+		path = Path(frappe.get_app_path(app, *OVERRIDE_PATH))
+		if path.exists():
+			found.append((app, path))
+
+	if len(found) > 1:
+		frappe.throw(
+			"More than one app overrides the Shopify listing agent: "
+			f"{[app for app, _ in found]}. A site has one listing agent, so leave "
+			"only the customer app whose store this site is."
+		)
+	return found[0] if found else (None, None)
+
+
+def parse_override(text):
+	"""
+	Split an override file into (frontmatter dict, prompt body).
+
+	Frontmatter is optional, `key: value` per line between two `---` lines. Kept
+	deliberately dumb — it exists only for `model` and `description`, everything else
+	belongs in the prompt itself.
+	"""
+	meta, body = {}, text
+
+	if text.lstrip().startswith("---"):
+		stripped = text.lstrip()
+		end = stripped.find("\n---", 3)
+		if end != -1:
+			block = stripped[3:end]
+			body = stripped[end + 4:].lstrip("-").lstrip("\n")
+			for line in block.strip().splitlines():
+				line = line.strip()
+				if not line or line.startswith("#"):
+					continue
+				key, _, value = line.partition(":")
+				key = key.strip()
+				if key not in OVERRIDE_KEYS:
+					frappe.throw(
+						f"Unknown key '{key}' in an agents/shopify_listing.md "
+						f"frontmatter. Supported: {', '.join(OVERRIDE_KEYS)}."
+					)
+				meta[key] = value.strip()
+
+	return meta, body.strip()
+
+
+def build_agent_meta():
+	"""
+	The registration manifest setup/install.py upserts into alaiy_os's OS Agent
+	Registry (and its OS Agent Tool child rows): the vanilla agent, with this site's
+	override appended to its prompt.
+
+	Credentials are NOT part of this. Model access comes from Alaiy OS core (the
+	engine's anthropic_api_key); the image tools read their own keys from
+	site_config.json.
+	"""
+	app, path = find_override()
+	meta, body = parse_override(path.read_text(encoding="utf-8")) if path else ({}, "")
+
+	prompt = f"{BASE_PROMPT.rstrip()}\n\n{body}\n" if body else BASE_PROMPT
+	tools = [dict(spec, tool_id=tool_id, connector=None)
+	         for tool_id, spec in tool_catalog(BASE_SCHEMA).items()]
+
+	return {
+		"agent_id": AGENT_ID,
+		"agent_name": AGENT_NAME,
+		"description": meta.get("description") or DEFAULT_DESCRIPTION,
+		"icon": AGENT_ICON,
+		# Reached through this app's run-agent desk page and the Agents hub.
+		"page": None,
+		# No settings DocType: the agent stores no credentials.
+		"settings_doctype": None,
+		"model": meta.get("model") or DEFAULT_MODEL,
+		"max_turns": DEFAULT_MAX_TURNS,
+		"system_prompt": prompt,
+		"output_format": "JSON",
+		"output_schema": BASE_SCHEMA,
+		"tools": tools,
+		# A consequence of the tools, not a separate declaration.
+		"input_options": [t["input_option"] for t in tools if t.get("input_option")],
+		# Not registry fields; useful to whoever is debugging why a prompt looks the
+		# way it does.
+		"override_app": app,
+	}
