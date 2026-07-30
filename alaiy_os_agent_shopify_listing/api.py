@@ -95,6 +95,50 @@ def bulk_enrich(item_codes, notes=None, batch_size=None, skip_enriched=0, **togg
 
 
 @frappe.whitelist()
+def approve_listings(names):
+	"""
+	Approve many enriched listings at once — the list view's "Approve" action.
+
+	Each listing is approved through a normal document save, so the same
+	on_update hook that fires for a one-at-a-time approval pushes each one to
+	its Shopify Product Listing. Returns {approved, skipped, failed, errors}:
+	already-approved rows are counted as skipped, and one bad listing does not
+	stop the rest (its error is reported per name instead).
+	"""
+	if isinstance(names, str):
+		names = json.loads(names)
+	if not names:
+		frappe.throw("approve_listings needs at least one listing name.")
+
+	approved, skipped, errors = 0, 0, {}
+	for name in names:
+		doc = frappe.get_doc(ENRICHED_DOCTYPE, name)
+		doc.check_permission("write")
+		if doc.status == "Approved":
+			skipped += 1
+			continue
+		try:
+			doc.status = "Approved"
+			doc.save()
+			frappe.db.commit()
+			approved += 1
+		except Exception:
+			frappe.db.rollback()
+			errors[name] = str(frappe.get_traceback().splitlines()[-1])
+			frappe.log_error(
+				title=f"Bulk approve failed: {name}",
+				message=frappe.get_traceback(),
+			)
+
+	return {
+		"approved": approved,
+		"skipped": skipped,
+		"failed": len(errors),
+		"errors": errors,
+	}
+
+
+@frappe.whitelist()
 def get_bulk_status(batch):
 	"""Progress of one bulk enrichment — the poll shape for a UI.
 
