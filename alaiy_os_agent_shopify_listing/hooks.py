@@ -55,22 +55,27 @@ app_include_js = [
 # sync_agent_sidebar() adds the "Agents" section + run-agent link to alaiy_os's OS
 # workspace sidebar. It runs after alaiy_os's own sidebar rebuild (this app
 # migrates last, being downstream of alaiy_os), so the addition sticks.
+# sync_custom_fields() adds this app's fields to the Shopify connector's DocTypes
+# (is_enriched on Shopify Product Listing). It no-ops when the connector is absent.
 after_install = [
     "alaiy_os_agent_shopify_listing.setup.install.sync_agent_registry",
     "alaiy_os_agent_shopify_listing.setup.install.sync_agent_sidebar",
+    "alaiy_os_agent_shopify_listing.setup.install.sync_custom_fields",
 ]
 
 after_migrate = [
     "alaiy_os_agent_shopify_listing.setup.install.sync_agent_registry",
     "alaiy_os_agent_shopify_listing.setup.install.sync_agent_sidebar",
+    "alaiy_os_agent_shopify_listing.setup.install.sync_custom_fields",
 ]
 
 # ---------------------------------------------------------------------------
 # Uninstallation
 # ---------------------------------------------------------------------------
-# Remove the agent's OS Agent Registry row (OS Agent Run history is kept) and the
-# sidebar entry.
+# Remove the agent's OS Agent Registry row (OS Agent Run history is kept), the
+# sidebar entry, and this app's custom fields (their columns are kept).
 before_uninstall = [
     "alaiy_os_agent_shopify_listing.setup.install.unregister",
     "alaiy_os_agent_shopify_listing.setup.install.unregister_sidebar",
+    "alaiy_os_agent_shopify_listing.setup.install.remove_custom_fields",
 ]

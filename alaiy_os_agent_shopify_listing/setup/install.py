@@ -223,3 +223,76 @@ def unregister_sidebar():
 	sidebar.save(ignore_permissions=True)
 	frappe.db.commit()
 	frappe.clear_cache()
+
+
+# ── Custom fields on the connector's DocTypes ─────────────────────────────────
+# `is_enriched` describes something only THIS app knows about — whether an approved
+# Shopify Enriched Listing is live on a listing — so it is owned here as a Custom
+# Field rather than added to Shopify Product Listing's JSON in
+# alaiy_os_connector_shopify. That keeps the connector installable without the agent,
+# and keeps the field's lifecycle tied to the app that writes it (see
+# shopify_enriched_listing.py, which sets and clears it).
+
+_CUSTOM_FIELDS = {
+	"Shopify Product Listing": [
+		{
+			"fieldname": "is_enriched",
+			"label": "Enriched",
+			"fieldtype": "Check",
+			"insert_after": "is_enabled",
+			"default": "0",
+			"read_only": 1,
+			"in_list_view": 1,
+			"in_standard_filter": 1,
+			"description": (
+				"An approved AI enrichment is live on this listing. Set when its "
+				"Shopify Enriched Listing is approved; cleared when the listing agent "
+				"re-runs, so it always means the CURRENT content passed review."
+			),
+		}
+	],
+}
+
+
+def sync_custom_fields():
+	"""
+	Create (idempotently) this app's custom fields on the connector's DocTypes.
+	Called on install and every migrate.
+
+	No-op until the connector is installed: this app does not depend on
+	alaiy_os_connector_shopify, so a site can run the agent without it. Editing the
+	dict above and migrating is enough to reconcile a changed property onto the site
+	— create_custom_fields updates an existing field in place when passed
+	update=True.
+	"""
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+
+	present = {
+		doctype: fields
+		for doctype, fields in _CUSTOM_FIELDS.items()
+		if frappe.db.exists("DocType", doctype)
+	}
+	if not present:
+		return
+
+	create_custom_fields(present, update=True)
+	frappe.db.commit()
+	frappe.clear_cache()
+
+
+def remove_custom_fields():
+	"""
+	Drop this app's custom fields on uninstall.
+
+	The underlying column is left in place — dropping it would destroy the enriched
+	flag for every listing, and a reinstall re-adopts the column as-is.
+	"""
+	for doctype, fields in _CUSTOM_FIELDS.items():
+		for field in fields:
+			name = f"{doctype}-{field['fieldname']}"
+			if frappe.db.exists("Custom Field", name):
+				frappe.delete_doc("Custom Field", name, ignore_permissions=True)
+	frappe.db.commit()
+	frappe.clear_cache()
+
+
