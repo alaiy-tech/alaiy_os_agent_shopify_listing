@@ -52,7 +52,7 @@ AGENT_ID = "shopify_listing"
 AGENT_NAME = "Shopify Listing"
 AGENT_ICON = "sparkles"
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_MAX_TURNS = 8
 DEFAULT_DESCRIPTION = (
 	"Generates a structured, Shopify-ready product listing from raw product data — "
