@@ -7,6 +7,7 @@ frappe.ui.form.on("Shopify Listing Bulk Enrich", {
 
 		const status = frm.doc.status;
 		const in_flight = status === "Queued" || status === "Running";
+		const rendering = status === "Generating Images";
 
 		if (!in_flight) {
 			frm.page.set_primary_action(
@@ -36,15 +37,18 @@ frappe.ui.form.on("Shopify Listing Bulk Enrich", {
 			);
 			listen(frm);
 		} else {
+			// "Generating Images" closes from the image workers, so keep listening
+			// for the bulk_enrich_done that flips it to its final status.
+			if (rendering) listen(frm);
 			show_image_progress(frm);
 		}
 	},
 });
 
 // The listings can be finished while their pictures are not: imagery is rendered
-// after each run closes (image_stage.py), so "Completed" here means the text is
-// done. Say so rather than letting someone open a listing and think an image was
-// lost.
+// after each run closes (image_stage.py), and the batch sits in "Generating
+// Images" until it lands. Say how many are left rather than letting someone open
+// a listing and think an image was lost.
 function show_image_progress(frm) {
 	if (frm.doc.status === "Draft") return;
 

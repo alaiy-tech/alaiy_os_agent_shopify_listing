@@ -35,6 +35,10 @@ PER_ITEM_TIMEOUT = 900
 
 PENDING_STATES = ("Pending", "Running")
 
+# Enriched-listing image states that mean stage two still owes pictures — the batch
+# does not close while any of its products is in one of these.
+IMAGES_IN_FLIGHT = ("Queued", "Running")
+
 
 def enqueue_chunks(batch, rows=None):
 	"""Split `rows` (default: every Pending row) into chunks, one worker job each.
@@ -175,10 +179,16 @@ def _mark_running(batch):
 
 
 def _finalize(batch):
-	"""Close the batch once no row is left to run.
+	"""Close the batch once no row is left to run and no imagery is still rendering.
 
-	Every chunk calls this; the "anything still pending?" check is what makes it
-	idempotent, so whichever chunk happens to finish last is the one that closes.
+	Every chunk calls this, and so does stage two as each product's images settle
+	(`finalize_images`); the "anything still pending?" checks are what make it
+	idempotent, so whichever worker happens to finish last is the one that closes.
+
+	The runs can all be done while their pictures are not — imagery is rendered
+	after each run closes (image_stage.py). Rather than calling that "Completed"
+	and letting someone conclude an image was lost, the batch parks in
+	"Generating Images" and is closed by the image worker that finishes last.
 	"""
 	statuses = [
 		row.status
@@ -204,6 +214,26 @@ def _finalize(batch):
 	else:
 		status = "Completed with Errors"
 
+	if status != "Cancelled" and _images_pending(batch):
+		frappe.db.set_value(
+			BATCH_DOCTYPE,
+			batch,
+			{"status": "Generating Images", "succeeded": succeeded, "failed": failed, "skipped": skipped},
+			update_modified=False,
+		)
+		frappe.db.commit()
+		frappe.publish_realtime(
+			"bulk_enrich_progress",
+			{"batch": batch, "status": "Generating Images"},
+			doctype=BATCH_DOCTYPE,
+			docname=batch,
+		)
+		# Re-check after the status is visible: an image job that finished between
+		# the check above and that write found the batch not yet parked and nudged
+		# nothing, so without this the batch would wait for a nudge already spent.
+		if _images_pending(batch):
+			return
+
 	frappe.db.set_value(
 		BATCH_DOCTYPE,
 		batch,
@@ -223,6 +253,40 @@ def _finalize(batch):
 		doctype=BATCH_DOCTYPE,
 		docname=batch,
 	)
+
+
+def _images_pending(batch):
+	"""How many of this batch's successful products still have imagery in flight.
+
+	Scoped to Success rows: a failed run never queued images this pass, and
+	save_listing recomputes image_status on every save, so a stale "Queued" from an
+	earlier enrichment cannot leak in through a product that just re-ran.
+	"""
+	item_codes = frappe.get_all(
+		ITEM_DOCTYPE,
+		filters={"parent": batch, "parenttype": BATCH_DOCTYPE, "status": "Success"},
+		pluck="item_code",
+	)
+	if not item_codes:
+		return 0
+	return frappe.db.count(
+		ENRICHED_DOCTYPE,
+		{"name": ("in", item_codes), "image_status": ("in", IMAGES_IN_FLIGHT)},
+	)
+
+
+def finalize_images(item_code):
+	"""Stage two's nudge: this product's imagery just settled (rendered, failed, or
+	its listing vanished) — close any batch that was only waiting on images."""
+	batches = frappe.get_all(
+		ITEM_DOCTYPE,
+		filters={"item_code": item_code, "parenttype": BATCH_DOCTYPE},
+		pluck="parent",
+		distinct=True,
+	)
+	for batch in batches:
+		if frappe.db.get_value(BATCH_DOCTYPE, batch, "status") == "Generating Images":
+			_finalize(batch)
 
 
 def _publish(batch, row, item_code, status):

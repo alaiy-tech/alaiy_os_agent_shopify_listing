@@ -17,10 +17,12 @@ import json
 import frappe
 from frappe.utils import cint, sbool
 
-from alaiy_os_agent_shopify_listing.bulk import BATCH_DOCTYPE, DEFAULT_BATCH_SIZE, ENRICHED_DOCTYPE
-
-# Image states that mean stage two still owes this listing its pictures.
-IMAGES_IN_FLIGHT = ("Queued", "Running")
+from alaiy_os_agent_shopify_listing.bulk import (
+	BATCH_DOCTYPE,
+	DEFAULT_BATCH_SIZE,
+	ENRICHED_DOCTYPE,
+	IMAGES_IN_FLIGHT,
+)
 
 
 def _flag(value):
@@ -145,9 +147,10 @@ def get_bulk_status(batch):
 	Mirrors alaiy_os.api.agents.get_run, one level up: the batch's own state plus a
 	row per product with the run to open for its output.
 
-	`status` covers the agent runs only. Imagery is produced after each run closes
-	(see image_stage.py), so a Completed batch can still have images rendering —
-	`images_pending` is how many, and each row carries its own `image_status`.
+	Imagery is produced after each run closes (see image_stage.py): a batch whose
+	runs are all done but whose images are still rendering reports status
+	"Generating Images" until stage two settles — `images_pending` is how many are
+	left, and each row carries its own `image_status`.
 	"""
 	doc = frappe.get_doc(BATCH_DOCTYPE, batch)
 	doc.check_permission("read")

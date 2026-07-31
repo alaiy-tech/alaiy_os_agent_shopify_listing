@@ -13,11 +13,26 @@ class ShopifyEnrichedListing(Document):
 		# "Approved" — the previous status must come from the pre-save snapshot.
 		# A brand-new doc has no snapshot; an agent never inserts as Approved, so
 		# only a real transition (anything -> Approved) pushes.
-		if self.status != "Approved":
-			return
 		before = self.get_doc_before_save()
-		if before and before.status != "Approved":
-			self._push_to_listing()
+		if self.status == "Approved":
+			if before and before.status != "Approved":
+				self._push_to_listing()
+		elif before is None or before.status == "Approved":
+			# The listing no longer carries approved content: either the agent
+			# re-ran (save_listing resets status to "Needs Review", and a fresh
+			# insert after a delete has no snapshot) or an admin un-approved it.
+			self._clear_enriched_flag()
+
+	def on_trash(self):
+		# Deleting the enrichment record means nothing vouches for the listing's
+		# content any more.
+		self._clear_enriched_flag()
+
+	def _clear_enriched_flag(self):
+		if frappe.db.exists("Shopify Product Listing", self.item_code):
+			frappe.db.set_value(
+				"Shopify Product Listing", self.item_code, "is_enriched", 0, update_modified=False
+			)
 
 	def _push_to_listing(self):
 		"""Push approved enrichment back to the Shopify Product Listing."""
@@ -27,6 +42,7 @@ class ShopifyEnrichedListing(Document):
 
 		listing_doc = frappe.get_doc("Shopify Product Listing", listing_name)
 
+		listing_doc.is_enriched = 1
 		listing_doc.listing_title = self.title
 		listing_doc.listing_description = self.description
 		listing_doc.listing_category = self.category

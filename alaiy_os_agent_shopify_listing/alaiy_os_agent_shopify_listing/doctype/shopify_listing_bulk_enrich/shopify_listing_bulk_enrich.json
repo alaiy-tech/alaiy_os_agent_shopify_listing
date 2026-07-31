@@ -39,7 +39,7 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Status",
-   "options": "Draft\nQueued\nRunning\nCompleted\nCompleted with Errors\nFailed\nCancelled",
+   "options": "Draft\nQueued\nRunning\nGenerating Images\nCompleted\nCompleted with Errors\nFailed\nCancelled",
    "read_only": 1
   },
   {
@@ -147,7 +147,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-07-29 00:00:00.000000",
+ "modified": "2026-07-30 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Alaiy Os Agent Shopify Listing",
  "name": "Shopify Listing Bulk Enrich",

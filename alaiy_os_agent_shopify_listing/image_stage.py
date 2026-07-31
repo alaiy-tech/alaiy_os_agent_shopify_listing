@@ -95,6 +95,7 @@ def run_step(item_code, step, work):
 	if not frappe.db.exists(ENRICHED_DOCTYPE, item_code):
 		# The only way here is a run that saved its listing and had it deleted
 		# before this job ran. Nothing to patch, and nothing worth failing over.
+		_nudge_batches(item_code)
 		return
 
 	_set_state(item_code, "Running", None)
@@ -107,6 +108,7 @@ def run_step(item_code, step, work):
 		frappe.log_error(title=f"Listing images {item_code}: {step} failed")
 		_set_state(item_code, "Failed", _summary(str(exc)))
 		_publish(item_code, "Failed")
+		_nudge_batches(item_code)
 		return
 
 	rendered = result["images"]
@@ -129,6 +131,20 @@ def run_step(item_code, step, work):
 		tokens=result.get("image_tokens") or 0,
 	)
 	_publish(item_code, status)
+	_nudge_batches(item_code)
+
+
+def _nudge_batches(item_code):
+	"""Tell bulk enrichment this product's imagery is settled — a batch whose runs
+	are all done parks in "Generating Images" and waits for exactly this (see
+	bulk._finalize). Never allowed to fail the job: the images themselves are
+	already applied by the time this runs."""
+	try:
+		from alaiy_os_agent_shopify_listing.bulk import finalize_images
+
+		finalize_images(item_code)
+	except Exception:
+		frappe.log_error(title=f"Listing images {item_code}: batch nudge failed")
 
 
 def _render(step, item_code, work):

@@ -12,8 +12,10 @@ from frappe.utils import cint, now_datetime
 
 from alaiy_os_agent_shopify_listing.bulk import DEFAULT_BATCH_SIZE, enqueue_chunks
 
-# Statuses a batch can be (re)started from — anything but in-flight.
-RESTARTABLE = ("Draft", "Completed", "Completed with Errors", "Failed", "Cancelled")
+# Statuses a batch can be (re)started from — anything but in-flight. "Generating
+# Images" is deliberately restartable: the runs are done, and a re-run is also the
+# escape hatch for imagery stuck on a lost worker job.
+RESTARTABLE = ("Draft", "Generating Images", "Completed", "Completed with Errors", "Failed", "Cancelled")
 IN_FLIGHT = ("Queued", "Running")
 
 
