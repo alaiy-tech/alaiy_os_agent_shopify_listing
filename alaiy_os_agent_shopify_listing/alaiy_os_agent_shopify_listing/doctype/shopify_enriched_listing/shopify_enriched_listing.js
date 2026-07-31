@@ -90,7 +90,12 @@ function render_image_preview(frm) {
 	const blocks = rows
 		.map((row, idx) => {
 			const paired = !!row.source_url;
-			const result_label = row.kind ? cap(row.kind) : paired ? __("Result") : __("Generated");
+			let result_label = row.kind ? cap(row.kind) : paired ? __("Result") : __("Generated");
+			if (row.item_variant) {
+				// A variant's image: say whose, since it lands on that variant's
+				// variant_image on approval rather than in the listing's images.
+				result_label = `${result_label} — ${__("Variant")} ${row.item_variant}`;
+			}
 
 			const panes = paired
 				? `${pane(row.source_url, __("Source"), "")}

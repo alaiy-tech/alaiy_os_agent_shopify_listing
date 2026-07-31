@@ -34,7 +34,10 @@ import frappe
 from alaiy_os_agent_shopify_listing.tools import images
 
 # Cap how many photos we send to the model to keep token/latency cost bounded.
+# Listing photos and variant photos are budgeted separately: a product with many
+# variants must not crowd out the listing's own photos, and vice versa.
 MAX_IMAGES = 5
+MAX_VARIANT_IMAGES = 5
 
 # The DocType the agent reads from. Its `name` is the template item_code
 # (autoname: field:item), so a caller's item_code doubles as the listing name.
@@ -89,6 +92,31 @@ def get_listing(item_code):
 	return frappe.get_doc(LISTING_DOCTYPE, item_code)
 
 
+def variant_image_map(listing):
+	"""{item_variant: variant_image url} for enabled variants that have a photo."""
+	return {
+		v.get("item_variant"): v.get("variant_image")
+		for v in (listing.get("variants") or [])
+		if v.get("item_variant") and v.get("variant_image") and v.get("is_enabled")
+	}
+
+
+def _collect_variant_image_blocks(listing):
+	"""
+	Up to MAX_VARIANT_IMAGES photo blocks for the listing's variants, labelled with
+	the variant's item code so the model can tie what it sees (colour, size chart,
+	printed text) back to the exact variant it belongs to.
+	"""
+	blocks = []
+	for item_variant, url in variant_image_map(listing).items():
+		if len(blocks) >= MAX_VARIANT_IMAGES:
+			break
+		block = images.image_block_from_url(url)
+		if block:
+			blocks.append((f"{url} (variant {item_variant})", block))
+	return blocks
+
+
 def _collect_image_blocks(listing):
 	"""
 	Gather up to MAX_IMAGES photo blocks from a Shopify Product Listing's `images`
@@ -141,13 +169,16 @@ def get_product(item_code):
 				"item_variant": v.get("item_variant"),
 				"price": v.get("variant_price"),
 				"is_enabled": bool(v.get("is_enabled")),
+				"variant_image": v.get("variant_image"),
 			}
 			for v in (listing.get("variants") or [])
 		],
 	}
 
 	labelled = _collect_image_blocks(listing)
+	variant_labelled = _collect_variant_image_blocks(listing)
 	data["image_count"] = len(labelled)
+	data["variant_image_count"] = len(variant_labelled)
 
 	blocks = [
 		{
@@ -170,6 +201,17 @@ def get_product(item_code):
 			"text": "No usable product photos are on the listing. Enrich from the text "
 			"only and flag every visually-determined attribute in needs_review.",
 		})
+
+	if variant_labelled:
+		blocks.append({
+			"type": "text",
+			"text": f"\n{len(variant_labelled)} variant photo(s) follow, each labelled "
+			"with its variant's item code. Use them to verify each variant's option "
+			"values (colour, size, printed text) for the `variants` array:",
+		})
+		for idx, (label, image_block) in enumerate(variant_labelled, start=1):
+			blocks.append({"type": "text", "text": f"Variant photo {idx}: {label}"})
+			blocks.append(image_block)
 
 	return {"_content_blocks": blocks}
 
@@ -252,9 +294,12 @@ def save_listing(listing, item_code=None):
 	stored as JSON — so nothing is lost even if the flattened fields drift from the
 	schema.
 
-	Image rows use one shape — {kind, source_url, url, brief, note}, each column
-	optional — so a single child table serves both the tool that generates imagery and
-	the one that reworks existing photos.
+	Image rows use one shape — {kind, item_variant, source_url, url, brief, note},
+	each column optional — so a single child table serves both the tool that generates
+	imagery and the one that reworks existing photos. A row with item_variant set is a
+	variant's image (delivered to that variant's `variant_image` on approval); it
+	shares the listing's image_status rather than having a lifecycle of its own. The
+	per-variant observations land in variants_json, review material only.
 
 	Returns {name, status, url} pointing at the new/updated record.
 	"""
@@ -290,6 +335,7 @@ def save_listing(listing, item_code=None):
 
 	# structured attributes -> pretty JSON; whole payload kept verbatim for audit
 	doc.attributes_json = frappe.as_json(listing.get("attributes") or {})
+	doc.variants_json = frappe.as_json(listing.get("variants") or [])
 	doc.output_json = frappe.as_json(listing)
 
 	# rebuild the image child table from whatever the image tool produced
@@ -297,6 +343,7 @@ def save_listing(listing, item_code=None):
 	for img in (listing.get("images") or []):
 		doc.append("images", {
 			"kind": img.get("kind"),
+			"item_variant": img.get("item_variant"),
 			"source_url": img.get("source_url"),
 			"url": img.get("url"),
 			"brief": img.get("brief"),

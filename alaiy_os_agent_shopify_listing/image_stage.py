@@ -167,23 +167,30 @@ def _apply(item_code, rendered):
 
 	Rows are matched to what stage one already wrote — by `kind` for a generated
 	set, by `source_url` for translated photos — and appended if the model dropped
-	the placeholder, so a rendered image is never silently thrown away.
+	the placeholder, so a rendered image is never silently thrown away. One rendered
+	image may patch SEVERAL rows: a photo shared by the listing and a variant (or by
+	two variants) is translated once but has a placeholder per use, each carrying its
+	own `item_variant`, and every one of them gets the result.
 	"""
 	doc = frappe.get_doc(ENRICHED_DOCTYPE, item_code)
 	existing = list(doc.images or [])
 	produced = 0
 
 	for image in rendered:
-		row = _match(existing, image)
-		if row is None:
+		rows = _match(existing, image)
+		if not rows:
+			# The fallback row has no item_variant: the render result does not know
+			# which use(s) of the photo the model dropped, so it lands listing-level.
 			row = doc.append("images", {})
 			existing.append(row)
+			rows = [row]
 
-		row.kind = image.get("kind") or row.kind
-		row.source_url = image.get("source_url") or row.source_url
-		row.brief = image.get("brief") or row.brief
-		row.url = image.get("url")
-		row.note = image.get("note")
+		for row in rows:
+			row.kind = image.get("kind") or row.kind
+			row.source_url = image.get("source_url") or row.source_url
+			row.brief = image.get("brief") or row.brief
+			row.url = image.get("url")
+			row.note = image.get("note")
 		if image.get("url"):
 			produced += 1
 
@@ -193,15 +200,15 @@ def _apply(item_code, rendered):
 
 
 def _match(rows, image):
-	"""The placeholder stage one wrote for this image, if it is still there."""
+	"""Every placeholder stage one wrote for this image that is still unfilled."""
 	for key in ("source_url", "kind"):
 		value = image.get(key)
 		if not value:
 			continue
-		for row in rows:
-			if row.get(key) == value and not row.url:
-				return row
-	return None
+		matched = [row for row in rows if row.get(key) == value and not row.url]
+		if matched:
+			return matched
+	return []
 
 
 def _set_state(item_code, status, error, tokens=None):

@@ -7,6 +7,7 @@
  "engine": "InnoDB",
  "field_order": [
   "kind",
+  "item_variant",
   "source_url",
   "url",
   "brief",
@@ -20,6 +21,15 @@
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Kind"
+  },
+  {
+   "columns": 1,
+   "description": "The variant this image belongs to. Empty for a listing-level image. On approval a variant image is written to that variant's `variant_image`, not to the listing's images table. Shares the parent's Image Status — there is no per-variant lifecycle.",
+   "fieldname": "item_variant",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Variant",
+   "options": "Item"
   },
   {
    "columns": 2,

@@ -49,17 +49,22 @@ class ShopifyEnrichedListing(Document):
 		listing_doc.listing_product_type = self.product_type
 
 		self._sync_images(listing_doc)
+		self._sync_variant_images(listing_doc)
 		self._sync_attributes_as_metafields(listing_doc)
 
 		listing_doc.save(ignore_permissions=True)
 		frappe.db.commit()
 
 	def _sync_images(self, listing_doc):
-		"""Map enriched listing images to Shopify listing images."""
+		"""Map enriched listing images to Shopify listing images.
+
+		Variant images (rows with item_variant) are not listing images — they are
+		delivered by _sync_variant_images instead.
+		"""
 		listing_doc.set("images", [])
 
 		for idx, enriched_img in enumerate(self.images or []):
-			if not enriched_img.url:
+			if not enriched_img.url or enriched_img.item_variant:
 				continue
 
 			source_map = {
@@ -75,6 +80,29 @@ class ShopifyEnrichedListing(Document):
 				"sort_order": idx,
 				"generated_by_agent": self.name if source == "AI Enhanced" else None,
 			})
+
+	def _sync_variant_images(self, listing_doc):
+		"""Write each variant image onto its variant row's `variant_image`.
+
+		The variant rows are updated IN PLACE, never rebuilt: they carry
+		`sh_shopify_variant_id` and `variant_price`, which enrichment must not
+		disturb. A variant that has since been removed from the listing is skipped
+		with a message rather than failing the approval.
+		"""
+		variant_rows = {row.item_variant: row for row in (listing_doc.variants or [])}
+
+		for enriched_img in self.images or []:
+			if not enriched_img.url or not enriched_img.item_variant:
+				continue
+
+			row = variant_rows.get(enriched_img.item_variant)
+			if row is None:
+				frappe.msgprint(
+					f"Variant {enriched_img.item_variant} is no longer on the "
+					"listing; its enriched image was not applied."
+				)
+				continue
+			row.variant_image = enriched_img.url
 
 	def _sync_attributes_as_metafields(self, listing_doc):
 		"""Convert enriched attributes JSON to Shopify metafield rows."""

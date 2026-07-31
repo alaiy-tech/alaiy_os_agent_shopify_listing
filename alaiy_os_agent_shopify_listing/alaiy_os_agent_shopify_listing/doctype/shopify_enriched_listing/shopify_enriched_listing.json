@@ -24,6 +24,8 @@
   "image_tokens",
   "images_preview",
   "images",
+  "variants_section",
+  "variants_json",
   "review_section",
   "needs_review",
   "notes",
@@ -152,6 +154,20 @@
    "fieldtype": "Table",
    "label": "Images",
    "options": "Shopify Enriched Listing Image"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "variants_section",
+   "fieldtype": "Section Break",
+   "label": "Variants"
+  },
+  {
+   "description": "What the agent observed per variant — option values read from its photo and text, and suggestions where they disagree with the catalog. Review material only: nothing here is pushed automatically. Variant images live in the Images table above, tagged with their variant.",
+   "fieldname": "variants_json",
+   "fieldtype": "Code",
+   "label": "Variants (JSON)",
+   "options": "JSON",
+   "read_only": 1
   },
   {
    "fieldname": "review_section",

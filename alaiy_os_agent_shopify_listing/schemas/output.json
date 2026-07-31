@@ -31,11 +31,11 @@
     },
     "color": {
      "type": "string",
-     "description": "Colour name. List all available colours comma-separated when the product has colour variants."
+     "description": "Colour name. When the product has colour variants, list every variant's colour comma-separated, taken from the variants you actually saw (get_product's variants and their photos), not just the prose."
     },
     "size": {
      "type": "string",
-     "description": "Size or size range. Say which scale when it is regional."
+     "description": "Size or size range. When the product has size variants, derive the range from the actual variants. Say which scale when it is regional."
     },
     "dimensions": {
      "type": "string",
@@ -62,6 +62,13 @@
       "type": "string",
       "description": "What this image is, in the vocabulary your instructions give."
      },
+     "item_variant": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "The variant item code this image belongs to, copied verbatim from the image step's result entry. Null for a listing-level image — which is the value unless the image step itself set it."
+     },
      "source_url": {
       "type": "string",
       "description": "The input photo this image was derived from, when there was one."
@@ -85,6 +92,46 @@
       "description": "What the image step said about this entry, copied verbatim when it gave one. Leave null otherwise; do not write your own explanation of a null url."
      }
     }
+   }
+  },
+  "variants": {
+   "type": "array",
+   "description": "One entry per variant returned by get_product; an empty array when the product has none. This is review material for the admin — nothing in it is published automatically, and you never propose prices.",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+     "item_variant": {
+      "type": "string",
+      "description": "The variant's item code, exactly as get_product returned it."
+     },
+     "observed": {
+      "type": "object",
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "Option name -> value as you actually observed it for this variant, from its photo and the product text (e.g. {\"color\": \"Burgundy\"}). Only include options you can support with evidence."
+     },
+     "suggestions": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "Human-readable discrepancies or improvements for the admin, e.g. the catalog says 'red' but the variant photo shows burgundy. Empty when there is nothing to flag."
+     },
+     "notes": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "Anything else the admin should know about this variant. Null when there is nothing."
+     }
+    },
+    "required": [
+     "item_variant",
+     "observed",
+     "suggestions"
+    ]
    }
   },
   "needs_review": {
@@ -118,6 +165,7 @@
   "product_type",
   "attributes",
   "images",
+  "variants",
   "needs_review",
   "confidence"
  ]

@@ -182,6 +182,13 @@ def translate_product_images(item_code=None, image_urls=None, translate_images=F
 	render_translated() below, which calls alphashop's ai.image.translateImage API
 	and re-hosts each result.
 
+	The photos are the listing's own PLUS each enabled variant's `variant_image`,
+	under the same toggle and the same per-product cap (listing photos first).
+	A variant's entry carries `item_variant`, which flows through save_listing onto
+	the image row and routes the result to that variant's `variant_image` on
+	approval. A URL shared by the listing and a variant (or by two variants) is
+	paid for once — one translation patches every row that references it.
+
 	The exception is a URL-only product: it has no listing record for stage two to
 	deliver into, so its photos are translated inline and come back with real urls.
 
@@ -207,12 +214,23 @@ def translate_product_images(item_code=None, image_urls=None, translate_images=F
 	the rest of the listing.
 	"""
 	# ── Gate 1 (airtight): resolve the photos; no photos → nothing to do.
-	urls = []
+	# Targets are (source_url, item_variant) pairs: the listing's own photos first
+	# (item_variant None), then each enabled variant's photo tagged with its
+	# variant, so the cap spends the budget on the listing before the variants.
+	targets = []
 	if item_code and frappe.db.exists(base.LISTING_DOCTYPE, item_code):
-		urls = base.listing_image_urls(frappe.get_doc(base.LISTING_DOCTYPE, item_code))
-	if not urls and image_urls:
-		urls = [u for u in image_urls if u]
-	if not urls:
+		listing = frappe.get_doc(base.LISTING_DOCTYPE, item_code)
+		targets = [
+			{"source_url": url, "item_variant": None}
+			for url in base.listing_image_urls(listing)
+		]
+		targets += [
+			{"source_url": url, "item_variant": item_variant}
+			for item_variant, url in base.variant_image_map(listing).items()
+		]
+	if not targets and image_urls:
+		targets = [{"source_url": u, "item_variant": None} for u in image_urls if u]
+	if not targets:
 		return {
 			"images": [],
 			"note": "This product has no photos, so nothing was translated.",
@@ -236,49 +254,68 @@ def translate_product_images(item_code=None, image_urls=None, translate_images=F
 			f"{_ALPHASHOP_SK_KEY} in site_config.json). Do NOT retry; return each "
 			"image with url=null so the team can translate it manually."
 		)
-	selected = urls[:_MAX_TRANSLATED_IMAGES]
+	selected = targets[:_MAX_TRANSLATED_IMAGES]
 
 	# A URL-only product has no Shopify Enriched Listing for stage two to patch, so
 	# there is nowhere to deliver the results later — translate inline, as before.
 	if not item_code:
-		result = {"images": render_translated(None, {"urls": selected})["images"]}
+		urls = [t["source_url"] for t in selected]
+		result = {"images": render_translated(None, {"urls": urls})["images"]}
 	else:
-		# ── Gate 3: never pay to translate the same photo twice.
+		# ── Gate 3: never pay to translate the same photo twice. Per photo URL,
+		# not per target: a URL shared by the listing and a variant is queued once,
+		# and stage two patches every row that references it.
 		done = _already_translated(item_code)
-		todo = [url for url in selected if url not in done]
+		todo = []
+		for target in selected:
+			url = target["source_url"]
+			if url not in done and url not in todo:
+				todo.append(url)
 
 		# The kept entries are returned, not merely skipped: save_listing rebuilds
 		# the image table from what this run reports, so a translation left out here
 		# would be erased from the listing.
 		result = {
 			"images": [
-				{"source_url": url, "url": done[url], "note": _REUSED_NOTE}
-				for url in selected
-				if url in done
+				{
+					"source_url": t["source_url"],
+					"item_variant": t["item_variant"],
+					"url": done[t["source_url"]],
+					"note": _REUSED_NOTE,
+				}
+				for t in selected
+				if t["source_url"] in done
 			]
 		}
+		pending = [t for t in selected if t["source_url"] not in done]
 
 		if todo:
 			image_stage.queue_step(item_code, image_stage.TRANSLATE, {"urls": todo})
 			result["images"] += [
-				{"source_url": url, "url": None, "note": _QUEUED_NOTE} for url in todo
+				{
+					"source_url": t["source_url"],
+					"item_variant": t["item_variant"],
+					"url": None,
+					"note": _QUEUED_NOTE,
+				}
+				for t in pending
 			]
 			result["note"] = (
 				f"{len(todo)} photo(s) queued for translation. They are being "
 				"processed in the background and will be attached to this listing when "
 				"they are ready — this is normal and is NOT a failure. Copy these "
-				"entries verbatim, leave url as null, and do NOT record them in "
-				"needs_review."
+				"entries verbatim (including each entry's item_variant), leave url as "
+				"null, and do NOT record them in needs_review."
 			)
-		if len(result["images"]) > len(todo):
-			kept = len(result["images"]) - len(todo)
+		if len(result["images"]) > len(pending):
+			kept = len(result["images"]) - len(pending)
 			reused = (
 				f"{kept} photo(s) were translated on an earlier run and are reused "
 				"as-is, with their existing url. Copy them verbatim too."
 			)
 			result["note"] = f"{result['note']} {reused}" if result.get("note") else reused
 
-	skipped = len(urls) - len(selected)
+	skipped = len(targets) - len(selected)
 	if skipped > 0:
 		note = (
 			f"{skipped} further photo(s) were not translated: this product has more "
