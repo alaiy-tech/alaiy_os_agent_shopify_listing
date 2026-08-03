@@ -105,16 +105,18 @@ class ShopifyEnrichedListing(Document):
 			row.variant_image = enriched_img.url
 
 	def _sync_attributes_as_metafields(self, listing_doc):
-		"""Convert enriched attributes JSON to Shopify metafield rows."""
+		"""Convert the enriched attributes into Shopify metafield rows.
+
+		The `attributes` child table is the source, not `attributes_json`: the table
+		is what the Desk form shows and what a reviewer corrects before approving, so
+		it is what has to reach Shopify. The JSON stays the agent's untouched original.
+
+		A row enriched before the table existed has only the JSON, so an empty table
+		falls back to it rather than silently publishing no metafields.
+		"""
 		listing_doc.set("metafields", [])
 
-		try:
-			attributes = json.loads(self.attributes_json or "{}")
-		except (json.JSONDecodeError, ValueError):
-			frappe.msgprint("Warning: attributes_json is not valid JSON, skipping metafields sync.")
-			return
-
-		for key, value in (attributes or {}).items():
+		for key, value in self._attributes():
 			if not value:
 				continue
 
@@ -124,3 +126,14 @@ class ShopifyEnrichedListing(Document):
 				"type": "single_line_text_field",
 				"value": str(value),
 			})
+
+	def _attributes(self):
+		"""(key, value) pairs to publish — the table, or the JSON for an older row."""
+		if self.attributes:
+			return [(row.key, row.value) for row in self.attributes if row.key]
+
+		try:
+			return list((json.loads(self.attributes_json or "{}") or {}).items())
+		except (json.JSONDecodeError, ValueError):
+			frappe.msgprint("Warning: attributes_json is not valid JSON, skipping metafields sync.")
+			return []

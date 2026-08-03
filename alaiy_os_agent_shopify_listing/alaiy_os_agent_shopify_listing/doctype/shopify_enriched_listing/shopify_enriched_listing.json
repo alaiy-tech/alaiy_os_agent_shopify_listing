@@ -17,7 +17,7 @@
   "content_section",
   "description",
   "attributes_section",
-  "attributes_json",
+  "attributes",
   "images_section",
   "image_status",
   "image_error",
@@ -25,11 +25,13 @@
   "images_preview",
   "images",
   "variants_section",
-  "variants_json",
+  "variants",
   "review_section",
   "needs_review",
   "notes",
   "raw_section",
+  "attributes_json",
+  "variants_json",
   "output_json"
  ],
  "fields": [
@@ -104,11 +106,19 @@
    "label": "Attributes"
   },
   {
-   "description": "Structured product attributes, as JSON. These become the listing's Shopify metafields on publish.",
+   "description": "Structured product attributes. These become the listing's Shopify metafields (namespace `custom`) on approval, so edit them here before approving.",
+   "fieldname": "attributes",
+   "fieldtype": "Table",
+   "label": "Attributes",
+   "options": "Shopify Enriched Listing Attribute"
+  },
+  {
+   "description": "The attributes exactly as the agent returned them, kept for audit. The Attributes table is what gets published — editing this changes nothing.",
    "fieldname": "attributes_json",
    "fieldtype": "Code",
    "label": "Attributes (JSON)",
-   "options": "JSON"
+   "options": "JSON",
+   "read_only": 1
   },
   {
    "fieldname": "images_section",
@@ -162,12 +172,11 @@
    "label": "Variants"
   },
   {
-   "description": "What the agent observed per variant — option values read from its photo and text, and suggestions where they disagree with the catalog. Review material only: nothing here is pushed automatically. Variant images live in the Images table above, tagged with their variant.",
-   "fieldname": "variants_json",
-   "fieldtype": "Code",
-   "label": "Variants (JSON)",
-   "options": "JSON",
-   "read_only": 1
+   "description": "What the agent observed per variant — option values read from its own photo and text, and suggestions where they disagree with the catalog. Review material only: nothing here is pushed on approval, and the agent never renames a variant. Variant images live in the Images table above, tagged with their variant.",
+   "fieldname": "variants",
+   "fieldtype": "Table",
+   "label": "Variants",
+   "options": "Shopify Enriched Listing Variant"
   },
   {
    "fieldname": "review_section",
@@ -190,6 +199,14 @@
    "fieldname": "raw_section",
    "fieldtype": "Section Break",
    "label": "Raw Agent Output"
+  },
+  {
+   "description": "The per-variant observations exactly as the agent returned them, kept for audit. The Variants table is the readable copy.",
+   "fieldname": "variants_json",
+   "fieldtype": "Code",
+   "label": "Variants (JSON)",
+   "options": "JSON",
+   "read_only": 1
   },
   {
    "description": "Verbatim JSON returned by the agent, kept for audit.",

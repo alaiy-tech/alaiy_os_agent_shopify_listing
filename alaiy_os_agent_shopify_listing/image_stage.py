@@ -166,11 +166,16 @@ def _apply(item_code, rendered):
 	"""Write the rendered urls onto the listing's image rows. Returns how many worked.
 
 	Rows are matched to what stage one already wrote — by `kind` for a generated
-	set, by `source_url` for translated photos — and appended if the model dropped
-	the placeholder, so a rendered image is never silently thrown away. One rendered
-	image may patch SEVERAL rows: a photo shared by the listing and a variant (or by
-	two variants) is translated once but has a placeholder per use, each carrying its
-	own `item_variant`, and every one of them gets the result.
+	set, by `source_url` for translated photos — and appended if it is not there, so
+	a rendered image is never silently thrown away. A translated photo arrives as one
+	entry PER USE (see render_translated), so the listing's row and each variant's
+	row are written from their own entry, carrying their own `item_variant`.
+
+	Appending is not an edge case for translation: the rows are rebuilt by
+	save_listing from what the MODEL wrote down, and a model that dropped an entry —
+	or its item_variant — would otherwise cost that variant its picture. Here the
+	plan the tool queued wins, and the listing ends up with the rows it should have
+	regardless of what the model reported.
 	"""
 	doc = frappe.get_doc(ENRICHED_DOCTYPE, item_code)
 	existing = list(doc.images or [])
@@ -179,9 +184,7 @@ def _apply(item_code, rendered):
 	for image in rendered:
 		rows = _match(existing, image)
 		if not rows:
-			# The fallback row has no item_variant: the render result does not know
-			# which use(s) of the photo the model dropped, so it lands listing-level.
-			row = doc.append("images", {})
+			row = doc.append("images", {"item_variant": image.get("item_variant")})
 			existing.append(row)
 			rows = [row]
 
@@ -200,12 +203,31 @@ def _apply(item_code, rendered):
 
 
 def _match(rows, image):
-	"""Every placeholder stage one wrote for this image that is still unfilled."""
+	"""The row(s) this rendered image belongs in: the placeholders stage one wrote
+	for it, plus any row that already holds exactly this result.
+
+	A rendered image that names its variant — every translated entry does, with None
+	for a listing-level one — is only ever matched against rows for that same
+	variant. Without that, a variant's photo and the listing's copy of the same photo
+	would match each other and the wrong picture could reach `variant_image`.
+
+	Matching a row that already holds this url is what makes re-delivery a no-op: a
+	job queued only to reconcile rows an earlier run produced must not append a
+	second copy of every one of them.
+	"""
+	if "item_variant" in image:
+		want = image.get("item_variant") or None
+		rows = [row for row in rows if (row.get("item_variant") or None) == want]
+
 	for key in ("source_url", "kind"):
 		value = image.get(key)
 		if not value:
 			continue
-		matched = [row for row in rows if row.get(key) == value and not row.url]
+		matched = [
+			row
+			for row in rows
+			if row.get(key) == value and (not row.url or row.url == image.get("url"))
+		]
 		if matched:
 			return matched
 	return []

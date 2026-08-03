@@ -4,3 +4,4 @@
 
 [post_model_sync]
 # Patches added in this section will be executed after doctypes are migrated
+alaiy_os_agent_shopify_listing.patches.backfill_enriched_tables

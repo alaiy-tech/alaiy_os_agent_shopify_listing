@@ -1,0 +1,43 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-08-03 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "key",
+  "value"
+ ],
+ "fields": [
+  {
+   "columns": 3,
+   "description": "The attribute name, in lower_snake_case. Becomes the Shopify metafield key under the `custom` namespace on approval.",
+   "fieldname": "key",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Key",
+   "reqd": 1
+  },
+  {
+   "columns": 7,
+   "description": "Plain text. Edited here before approval, this is what is published — the JSON below the table is the agent's original, kept for audit.",
+   "fieldname": "value",
+   "fieldtype": "Long Text",
+   "in_list_view": 1,
+   "label": "Value"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-08-03 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Alaiy Os Agent Shopify Listing",
+ "name": "Shopify Enriched Listing Attribute",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "ASC",
+ "states": []
+}

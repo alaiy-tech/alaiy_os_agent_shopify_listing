@@ -112,6 +112,14 @@ and the Agents hub. This app owns agent definitions and their tools:
 - `save_listing(listing, item_code)` — upserts the finished listing into
   `Shopify Enriched Listing` (one row per product) in *Needs Review* status.
 
+The enriched listing is a **review form, not a JSON dump**: attributes, per-variant
+observations and images are child tables, laid out like the Shopify Product Listing's
+own, so a reviewer edits rows. The Attributes table is what approval publishes as
+metafields, so a correction made there reaches Shopify. The agent's verbatim JSON is
+kept read-only under *Raw Agent Output* for audit; editing it changes nothing. A
+listing enriched before those tables existed is backfilled from its JSON by
+`patches/backfill_enriched_tables.py` on the next `bench migrate`.
+
 **The two image tools**, each opt-in per request and each gated in code rather than
 by the model's judgement — they act only when the product actually has a photo *and*
 the request's toggle is true. Both **queue** their work rather than doing it: see
@@ -206,6 +214,25 @@ erased from the listing.
 Image *generation* is deliberately not deduplicated the same way: each run writes
 fresh briefs, so re-running is a request for new imagery rather than a repeat of the
 old.
+
+**Translation covers the variants too, and does not trust the model to say so.** One
+`translate_product_images` call takes the listing's own photos *and* every enabled
+variant's `variant_image`, with no per-product cap — a variant left with Chinese text
+on its photo is worse than the cost of translating it. A photo shared by the listing
+and a variant (or by two variants) is translated **once** and written to every row
+that uses it, each row carrying the `item_variant` it belongs to.
+
+Which photo belongs to which variant is settled in the tool and travels with the
+queued job, so stage two writes those rows from that plan rather than from the
+`images` array the model returned. A model that drops a variant's entry — or just its
+`item_variant` — costs that variant nothing: the row is restored on delivery. The job
+is queued even when every photo was already translated, because reconciling those
+rows is its other half, and it re-delivers as a no-op rather than duplicating rows.
+
+Nothing reaches the Shopify Product Listing until an admin approves: on approval,
+rows with an `item_variant` are written onto that variant's `variant_image` (the
+variant rows are updated in place, so `sh_shopify_variant_id` and `variant_price`
+survive), and the rest become the listing's own images.
 
 The handoff cannot be corrupted by the model: the tool enqueues the job itself with
 `enqueue_after_commit=True`, so it fires on `save_listing`'s commit — the listing is

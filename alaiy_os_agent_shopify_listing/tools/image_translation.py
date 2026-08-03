@@ -186,11 +186,21 @@ def translate_product_images(item_code=None, image_urls=None, translate_images=F
 	and re-hosts each result.
 
 	EVERY photo is translated: the listing's own PLUS each enabled variant's
-	`variant_image`, under the one toggle, with no per-product cap.
-	A variant's entry carries `item_variant`, which flows through save_listing onto
-	the image row and routes the result to that variant's `variant_image` on
-	approval. A URL shared by the listing and a variant (or by two variants) is
-	paid for once — one translation patches every row that references it.
+	`variant_image`, under the one toggle, with no per-product cap. A URL shared by
+	the listing and a variant (or by two variants) is paid for once — one translation
+	fills every row that references it.
+
+	Which photo belongs to which variant is settled HERE, in code, and travels with
+	the queued job: stage two writes the rows from that plan, not from the `images`
+	array the model returns. So a variant's translated photo reaches its variant even
+	if the model drops the entry, or drops its `item_variant`, on the way out. The
+	entries returned below are the same plan, for the model to report — they are its
+	copy of the truth, not the truth itself.
+
+	A row's `item_variant` is what routes the result to that variant's
+	`variant_image` when an admin approves the listing (see
+	ShopifyEnrichedListing._sync_variant_images); nothing is written to the Shopify
+	Product Listing before that approval.
 
 	The exception is a URL-only product: it has no listing record for stage two to
 	deliver into, so its photos are translated inline and come back with real urls.
@@ -262,60 +272,65 @@ def translate_product_images(item_code=None, image_urls=None, translate_images=F
 	# there is nowhere to deliver the results later — translate inline, as before.
 	if not item_code:
 		urls = [t["source_url"] for t in targets]
-		result = {"images": render_translated(None, {"urls": urls})["images"]}
-	else:
-		# ── Gate 3: never pay to translate the same photo twice. Per photo URL,
-		# not per target: a URL shared by the listing and a variant is queued once,
-		# and stage two patches every row that references it.
-		done = _already_translated(item_code)
-		todo = []
-		for target in targets:
-			url = target["source_url"]
-			if url not in done and url not in todo:
-				todo.append(url)
+		return {"images": render_translated(None, {"urls": urls})["images"]}
 
-		# The kept entries are returned, not merely skipped: save_listing rebuilds
-		# the image table from what this run reports, so a translation left out here
-		# would be erased from the listing.
-		result = {
-			"images": [
-				{
-					"source_url": t["source_url"],
-					"item_variant": t["item_variant"],
-					"url": done[t["source_url"]],
-					"note": _REUSED_NOTE,
-				}
-				for t in targets
-				if t["source_url"] in done
-			]
-		}
-		pending = [t for t in targets if t["source_url"] not in done]
+	# ── Gate 3: never pay to translate the same photo twice. Per photo URL, not per
+	# target: a URL shared by the listing and a variant is queued once, and stage two
+	# fills every row that references it.
+	done = _already_translated(item_code)
+	todo = []
+	for target in targets:
+		url = target["source_url"]
+		if url not in done and url not in todo:
+			todo.append(url)
 
-		if todo:
-			image_stage.queue_step(item_code, image_stage.TRANSLATE, {"urls": todo})
-			result["images"] += [
-				{
-					"source_url": t["source_url"],
-					"item_variant": t["item_variant"],
-					"url": None,
-					"note": _QUEUED_NOTE,
-				}
-				for t in pending
-			]
-			result["note"] = (
-				f"{len(todo)} photo(s) queued for translation. They are being "
-				"processed in the background and will be attached to this listing when "
-				"they are ready — this is normal and is NOT a failure. Copy these "
-				"entries verbatim (including each entry's item_variant), leave url as "
-				"null, and do NOT record them in needs_review."
-			)
-		if len(result["images"]) > len(pending):
-			kept = len(result["images"]) - len(pending)
-			reused = (
-				f"{kept} photo(s) were translated on an earlier run and are reused "
-				"as-is, with their existing url. Copy them verbatim too."
-			)
-			result["note"] = f"{result['note']} {reused}" if result.get("note") else reused
+	# `targets` is the plan stage two delivers against: every use of every photo —
+	# the listing's own and each variant's — with the url already known for it. It is
+	# queued EVEN WHEN `todo` is empty (everything was translated on an earlier run),
+	# because writing those rows back onto the listing is the job's other half, and
+	# reconciling them costs nothing when there is nothing left to translate.
+	plan = [dict(target, url=done.get(target["source_url"])) for target in targets]
+	image_stage.queue_step(item_code, image_stage.TRANSLATE, {"urls": todo, "targets": plan})
+
+	# The same plan, for the model to report. Every entry is returned — including the
+	# ones reused from an earlier run — because save_listing rebuilds the image table
+	# from what this run reports; a translation left out here would disappear from the
+	# listing the model returns, even though stage two will still deliver it.
+	result = {
+		"images": [
+			{
+				"source_url": entry["source_url"],
+				"item_variant": entry["item_variant"],
+				"url": entry["url"],
+				"note": _REUSED_NOTE if entry["url"] else _QUEUED_NOTE,
+			}
+			for entry in plan
+		]
+	}
+
+	variants = sum(1 for entry in plan if entry["item_variant"])
+	notes = []
+	if todo:
+		notes.append(
+			f"{len(todo)} photo(s) queued for translation. They are being processed in "
+			"the background and will be attached to this listing when they are ready — "
+			"this is normal and is NOT a failure. Copy these entries verbatim "
+			"(including each entry's item_variant), leave url as null, and do NOT "
+			"record them in needs_review."
+		)
+	reused = sum(1 for entry in plan if entry["url"])
+	if reused:
+		notes.append(
+			f"{reused} entr(ies) were translated on an earlier run and are reused "
+			"as-is, with their existing url. Copy them verbatim too."
+		)
+	if variants:
+		notes.append(
+			f"{variants} of these entries are variant photos, each carrying the "
+			"item_variant it belongs to."
+		)
+	if notes:
+		result["note"] = " ".join(notes)
 
 	return result
 
@@ -341,31 +356,51 @@ def _already_translated(item_code):
 def render_translated(item_code, work):
 	"""Translate the queued photos. Stage two's worker — see image_stage.py.
 
-	Returns {"images": [{source_url, url, note}, ...], "image_tokens": 0}; a photo
-	that failed comes back with url=None and a note, so one bad photo costs one
-	photo rather than the whole product.
+	`work` holds the photos to translate (`urls`) and, for an item_code run, the
+	plan they were queued for (`targets`: every use of every photo as
+	{source_url, item_variant, url-already-known}).
+
+	Returns {"images": [{source_url, item_variant, url, note}, ...],
+	"image_tokens": 0} — ONE ENTRY PER USE, not per photo. A photo the listing and
+	two variants share is translated once and comes back as three entries, so
+	image_stage._apply writes it onto all three rows and each variant's row carries
+	its own item_variant. A photo that failed comes back with url=None and a note, so
+	one bad photo costs one photo rather than the whole product.
+
+	Without `targets` (a URL-only product) it falls back to one entry per photo,
+	which is all that shape has.
 
 	The photos go through concurrently. Each is an independent call to a service
 	that fetches, rewrites and returns an image — slow, and slow in parallel just
 	as well.
 	"""
+	urls = work.get("urls") or []
+	targets = work.get("targets")
+
 	ak = frappe.conf.get(_ALPHASHOP_AK_KEY)
 	sk = frappe.conf.get(_ALPHASHOP_SK_KEY)
-	if not ak or not sk:
+	# Only a job with something left to translate needs the service. A job queued
+	# purely to write an earlier run's results back onto the listing must not fail
+	# because the keys have since been removed.
+	if urls and (not ak or not sk):
 		frappe.throw(
 			f"Image translation is not configured (set {_ALPHASHOP_AK_KEY} and {_ALPHASHOP_SK_KEY})."
 		)
 	base_url = frappe.conf.get(_ALPHASHOP_BASE_URL_KEY) or _ALPHASHOP_BASE_URL
 
 	# Resolved on this thread: expanding a local File path needs the site context.
-	sources = [(url, images.public_image_url(url)) for url in work["urls"]]
+	sources = [(url, images.public_image_url(url)) for url in urls]
 
-	with ThreadPoolExecutor(max_workers=min(_RENDER_CONCURRENCY, len(sources) or 1)) as pool:
-		results = list(
-			pool.map(lambda pair: _try_translate(pair[1], ak, sk, base_url), sources)
-		)
+	results = []
+	if sources:
+		with ThreadPoolExecutor(max_workers=min(_RENDER_CONCURRENCY, len(sources))) as pool:
+			results = list(
+				pool.map(lambda pair: _try_translate(pair[1], ak, sk, base_url), sources)
+			)
 
-	out = []
+	# What this run produced, per photo. The fan-out onto each use of the photo
+	# happens below, so a shared photo is stored once here.
+	fresh = {}
 	for (url, _public), (payload, error) in zip(sources, results, strict=True):
 		if error:
 			# Logged here rather than in the worker thread: frappe.log_error needs
@@ -374,19 +409,38 @@ def render_translated(item_code, work):
 				title="Shopify listing: image translation failed",
 				message=f"{item_code} / {url}\n{error}",
 			)
-			out.append({
-				"source_url": url,
-				"url": None,
-				"note": f"Translation failed: {error}"[:200],
-			})
+			fresh[url] = {"url": None, "note": f"Translation failed: {error}"[:200]}
 			continue
 
 		out_bytes, out_media_type = payload
 		# Saving writes a File row, so it stays on this thread too.
-		hosted = images.save_public_image(
-			"listing-translated", out_bytes, out_media_type, default_ext=".jpg"
-		)
-		out.append({"source_url": url, "url": hosted, "note": None})
+		fresh[url] = {
+			"url": images.save_public_image(
+				"listing-translated", out_bytes, out_media_type, default_ext=".jpg"
+			),
+			"note": None,
+		}
+
+	if targets is None:
+		return {
+			"images": [{"source_url": url, **fresh[url]} for url, _public in sources],
+			"image_tokens": 0,
+		}
+
+	out = []
+	for target in targets:
+		source_url = target["source_url"]
+		if source_url in fresh:
+			produced = fresh[source_url]
+		else:
+			# Nothing was owed for this photo: an earlier run already translated it,
+			# and the url came along in the plan.
+			produced = {"url": target.get("url"), "note": _REUSED_NOTE if target.get("url") else None}
+		out.append({
+			"source_url": source_url,
+			"item_variant": target.get("item_variant"),
+			**produced,
+		})
 
 	return {"images": out, "image_tokens": 0}
 

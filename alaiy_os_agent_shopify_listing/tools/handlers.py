@@ -270,6 +270,25 @@ def get_reference_values():
 	}
 
 
+def _flatten(value):
+	"""One attribute value as the plain text a grid cell (and Shopify) wants.
+
+	The schema says these are strings, and they almost always are. A model that
+	returns a list or an object anyway must not end up writing "['a', 'b']" into a
+	metafield, so lists become a comma-separated line and anything else falls back
+	to JSON rather than Python's repr.
+	"""
+	if value is None:
+		return None
+	if isinstance(value, str):
+		return value
+	if isinstance(value, (int, float, bool)):
+		return str(value)
+	if isinstance(value, (list, tuple)):
+		return ", ".join(_flatten(v) or "" for v in value)
+	return frappe.as_json(value)
+
+
 def save_listing(listing, item_code=None):
 	"""
 	Persist an enriched listing into the shared Shopify Enriched Listing DocType
@@ -290,16 +309,22 @@ def save_listing(listing, item_code=None):
 	produces nothing else.
 
 	List-valued fields (needs_review, notes) are flattened to one-per-line text for a
-	readable Desk form, and the structured attributes plus the verbatim listing are
-	stored as JSON — so nothing is lost even if the flattened fields drift from the
-	schema.
+	readable Desk form. The structured parts — attributes and per-variant
+	observations — are written BOTH as child tables, which is what the Desk form
+	shows and what an admin edits, AND verbatim as JSON, which is the audit copy. The
+	whole payload is kept as JSON too, so nothing is lost even if the flattened
+	fields drift from the schema.
+
+	A variant row links to its variant Item; a variant the model named that is not an
+	Item is skipped rather than allowed to fail the save, since variants_json holds
+	it either way.
 
 	Image rows use one shape — {kind, item_variant, source_url, url, brief, note},
 	each column optional — so a single child table serves both the tool that generates
 	imagery and the one that reworks existing photos. A row with item_variant set is a
 	variant's image (delivered to that variant's `variant_image` on approval); it
 	shares the listing's image_status rather than having a lifecycle of its own. The
-	per-variant observations land in variants_json, review material only.
+	per-variant observations land in the `variants` table, review material only.
 
 	Returns {name, status, url} pointing at the new/updated record.
 	"""
@@ -337,6 +362,34 @@ def save_listing(listing, item_code=None):
 	doc.attributes_json = frappe.as_json(listing.get("attributes") or {})
 	doc.variants_json = frappe.as_json(listing.get("variants") or [])
 	doc.output_json = frappe.as_json(listing)
+
+	# The same two things again, as child tables — a reviewer reads and edits rows,
+	# not a JSON blob, exactly as they do on the Shopify Product Listing itself. The
+	# attributes table is the one approval publishes from (see
+	# ShopifyEnrichedListing._sync_attributes_as_metafields), so an edit made there
+	# reaches Shopify; the JSON fields beside them stay the agent's own words.
+	doc.set("attributes", [])
+	for key, value in (listing.get("attributes") or {}).items():
+		if key:
+			doc.append("attributes", {"key": key, "value": _flatten(value)})
+
+	doc.set("variants", [])
+	for variant in (listing.get("variants") or []):
+		item_variant = variant.get("item_variant")
+		# The row links to the variant Item, so a code that is not one would fail the
+		# save and lose an otherwise good enrichment. variants_json keeps the whole
+		# thing regardless, so nothing is actually lost by skipping the row.
+		if not item_variant or not frappe.db.exists("Item", item_variant):
+			continue
+		doc.append("variants", {
+			"item_variant": item_variant,
+			"observed": "\n".join(
+				f"{name}: {_flatten(value)}"
+				for name, value in (variant.get("observed") or {}).items()
+			),
+			"suggestions": "\n".join(variant.get("suggestions") or []),
+			"notes": variant.get("notes"),
+		})
 
 	# rebuild the image child table from whatever the image tool produced
 	doc.set("images", [])

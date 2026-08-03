@@ -1,0 +1,61 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-08-03 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "item_variant",
+  "observed",
+  "suggestions",
+  "notes"
+ ],
+ "fields": [
+  {
+   "columns": 2,
+   "description": "The variant this row is about, as it appears on the Shopify Product Listing.",
+   "fieldname": "item_variant",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Variant",
+   "options": "Item",
+   "reqd": 1
+  },
+  {
+   "columns": 3,
+   "description": "Option values the agent actually observed for this variant, one `option: value` per line — read from its own photo and the product text.",
+   "fieldname": "observed",
+   "fieldtype": "Small Text",
+   "in_list_view": 1,
+   "label": "Observed"
+  },
+  {
+   "columns": 4,
+   "description": "Where what the agent saw disagrees with the catalog, one per line — e.g. the variant is named 'red' but its photo shows burgundy. For a human to act on: nothing here is published, and the agent never renames a variant.",
+   "fieldname": "suggestions",
+   "fieldtype": "Small Text",
+   "in_list_view": 1,
+   "label": "Suggestions"
+  },
+  {
+   "columns": 2,
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "in_list_view": 1,
+   "label": "Notes"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-08-03 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Alaiy Os Agent Shopify Listing",
+ "name": "Shopify Enriched Listing Variant",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "ASC",
+ "states": []
+}
