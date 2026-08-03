@@ -28,12 +28,15 @@ from alaiy_os_agent_shopify_listing import image_stage
 from alaiy_os_agent_shopify_listing.tools import handlers as base
 from alaiy_os_agent_shopify_listing.tools import images
 
-# Cap how many photos we push through the paid translation API per product.
-_MAX_TRANSLATED_IMAGES = 10
+# Every photo a product has is translated — the listing's own and each enabled
+# variant's. There is deliberately no per-product cap: a variant whose photo was
+# left untranslated is a variant that ships with Chinese text on it, which is worse
+# than the cost of translating it. Spend is bounded by gate 3 instead (a photo is
+# never translated twice) and by the toggle being off by default.
 
-# How many photos go through the service at once — see render_translated. Below
-# the per-product cap on purpose: this is a paid third-party API, and ten
-# simultaneous requests per product across a batch is a good way to get throttled.
+# How many photos go through the service at once — see render_translated. This is a
+# paid third-party API, and firing every photo of every product in a batch at it
+# simultaneously is a good way to get throttled.
 _RENDER_CONCURRENCY = 4
 
 # What stage one puts on an image row that stage two has not produced yet. It is
@@ -182,8 +185,8 @@ def translate_product_images(item_code=None, image_urls=None, translate_images=F
 	render_translated() below, which calls alphashop's ai.image.translateImage API
 	and re-hosts each result.
 
-	The photos are the listing's own PLUS each enabled variant's `variant_image`,
-	under the same toggle and the same per-product cap (listing photos first).
+	EVERY photo is translated: the listing's own PLUS each enabled variant's
+	`variant_image`, under the one toggle, with no per-product cap.
 	A variant's entry carries `item_variant`, which flows through save_listing onto
 	the image row and routes the result to that variant's `variant_image` on
 	approval. A URL shared by the listing and a variant (or by two variants) is
@@ -216,7 +219,8 @@ def translate_product_images(item_code=None, image_urls=None, translate_images=F
 	# ── Gate 1 (airtight): resolve the photos; no photos → nothing to do.
 	# Targets are (source_url, item_variant) pairs: the listing's own photos first
 	# (item_variant None), then each enabled variant's photo tagged with its
-	# variant, so the cap spends the budget on the listing before the variants.
+	# variant. All of them are translated; the order is just what a reviewer expects
+	# to see first on the listing form.
 	targets = []
 	if item_code and frappe.db.exists(base.LISTING_DOCTYPE, item_code):
 		listing = frappe.get_doc(base.LISTING_DOCTYPE, item_code)
@@ -254,12 +258,10 @@ def translate_product_images(item_code=None, image_urls=None, translate_images=F
 			f"{_ALPHASHOP_SK_KEY} in site_config.json). Do NOT retry; return each "
 			"image with url=null so the team can translate it manually."
 		)
-	selected = targets[:_MAX_TRANSLATED_IMAGES]
-
 	# A URL-only product has no Shopify Enriched Listing for stage two to patch, so
 	# there is nowhere to deliver the results later — translate inline, as before.
 	if not item_code:
-		urls = [t["source_url"] for t in selected]
+		urls = [t["source_url"] for t in targets]
 		result = {"images": render_translated(None, {"urls": urls})["images"]}
 	else:
 		# ── Gate 3: never pay to translate the same photo twice. Per photo URL,
@@ -267,7 +269,7 @@ def translate_product_images(item_code=None, image_urls=None, translate_images=F
 		# and stage two patches every row that references it.
 		done = _already_translated(item_code)
 		todo = []
-		for target in selected:
+		for target in targets:
 			url = target["source_url"]
 			if url not in done and url not in todo:
 				todo.append(url)
@@ -283,11 +285,11 @@ def translate_product_images(item_code=None, image_urls=None, translate_images=F
 					"url": done[t["source_url"]],
 					"note": _REUSED_NOTE,
 				}
-				for t in selected
+				for t in targets
 				if t["source_url"] in done
 			]
 		}
-		pending = [t for t in selected if t["source_url"] not in done]
+		pending = [t for t in targets if t["source_url"] not in done]
 
 		if todo:
 			image_stage.queue_step(item_code, image_stage.TRANSLATE, {"urls": todo})
@@ -315,13 +317,6 @@ def translate_product_images(item_code=None, image_urls=None, translate_images=F
 			)
 			result["note"] = f"{result['note']} {reused}" if result.get("note") else reused
 
-	skipped = len(targets) - len(selected)
-	if skipped > 0:
-		note = (
-			f"{skipped} further photo(s) were not translated: this product has more "
-			f"than the {_MAX_TRANSLATED_IMAGES}-photo per-run cap. Record this in notes."
-		)
-		result["note"] = f"{result['note']} {note}" if result.get("note") else note
 	return result
 
 
