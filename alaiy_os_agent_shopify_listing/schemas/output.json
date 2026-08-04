@@ -53,7 +53,7 @@
   },
   "images": {
    "type": "array",
-   "description": "Images produced by the image step, for the listing's `images` table, in the order the tool returned them \u2014 copy its result entries verbatim EXCEPT for `brief`, which you must leave out entirely: it is already recorded against the image and repeating it here would be rejected. An empty array when no image step ran, when the product has no photos, or when the per-request image toggle was off.",
+   "description": "Images produced by the image step, for the listing's `images` table, in the order the tool returned them \u2014 copy its result entries verbatim, including each entry's `item_variant`. An empty array when no image step ran, when the product has no photos, or when the per-request image toggle was off.",
    "items": {
     "type": "object",
     "additionalProperties": false,

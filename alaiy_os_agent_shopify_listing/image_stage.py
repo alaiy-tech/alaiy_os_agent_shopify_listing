@@ -3,8 +3,8 @@
 """Stage two: the images, rendered after the listing text is already saved.
 
 The agent's run is stage one. It reads the product, writes the listing, and — when
-an image toggle is on — decides *what* imagery it wants: the briefs for a generated
-set, or the photos to translate. It does not wait for that imagery. The image tool
+an image toggle is on — resolves *which photos* the work applies to: the ones to
+retouch, or the ones to translate. It does not wait for that imagery. The image tool
 returns placeholders with ``url: None`` and queues the work here, so a run finishes
 in the ~35s its LLM turns actually take instead of the ~5 minutes the image API
 takes.
@@ -33,8 +33,8 @@ ENRICHED_DOCTYPE = "Shopify Enriched Listing"
 QUEUE_KEY = "listing_image_queue"
 DEFAULT_QUEUE = "long"
 
-# Generous: a five-shot set is five sequential-worst-case image renders plus the
-# re-hosting of each result.
+# Generous: a product with many photos is that many sequential-worst-case renders
+# plus the re-hosting of each result.
 JOB_TIMEOUT = 1800
 
 # The two steps stage two knows how to render, mapped to the module that owns each.
@@ -71,8 +71,8 @@ def queue_step(item_code, step, work):
 	"""Queue this product's image work, to run once the listing itself is saved.
 
 	Called by the image tools mid-run. `work` is everything the renderer needs —
-	the resolved reference photo and briefs, or the resolved photo urls — so stage
-	two never has to re-derive intent from what the model chose to write down.
+	the resolved photo urls and the plan of which row each belongs to — so stage two
+	never has to re-derive intent from what the model chose to write down.
 	"""
 	frappe.enqueue(
 		"alaiy_os_agent_shopify_listing.image_stage.run_step",
@@ -165,13 +165,14 @@ def _render(step, item_code, work):
 def _apply(item_code, rendered):
 	"""Write the rendered urls onto the listing's image rows. Returns how many worked.
 
-	Rows are matched to what stage one already wrote — by `kind` for a generated
-	set, by `source_url` for translated photos — and appended if it is not there, so
-	a rendered image is never silently thrown away. A translated photo arrives as one
-	entry PER USE (see render_translated), so the listing's row and each variant's
-	row are written from their own entry, carrying their own `item_variant`.
+	Rows are matched to what stage one already wrote — by `source_url`, the photo
+	each result came from, and by `kind` for any older row that carries one — and
+	appended if it is not there, so a rendered image is never silently thrown away.
+	Both steps deliver one entry PER USE of a photo (see render_generated and
+	render_translated), so the listing's row and each variant's row are written from
+	their own entry, carrying their own `item_variant`.
 
-	Appending is not an edge case for translation: the rows are rebuilt by
+	Appending is not an edge case: the rows are rebuilt by
 	save_listing from what the MODEL wrote down, and a model that dropped an entry —
 	or its item_variant — would otherwise cost that variant its picture. Here the
 	plan the tool queued wins, and the listing ends up with the rows it should have
@@ -206,8 +207,8 @@ def _match(rows, image):
 	"""The row(s) this rendered image belongs in: the placeholders stage one wrote
 	for it, plus any row that already holds exactly this result.
 
-	A rendered image that names its variant — every translated entry does, with None
-	for a listing-level one — is only ever matched against rows for that same
+	A rendered image that names its variant — every entry from either step does, with
+	None for a listing-level one — is only ever matched against rows for that same
 	variant. Without that, a variant's photo and the listing's copy of the same photo
 	would match each other and the wrong picture could reach `variant_image`.
 

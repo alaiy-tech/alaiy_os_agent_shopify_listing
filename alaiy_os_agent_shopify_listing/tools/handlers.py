@@ -320,8 +320,10 @@ def save_listing(listing, item_code=None):
 	it either way.
 
 	Image rows use one shape — {kind, item_variant, source_url, url, brief, note},
-	each column optional — so a single child table serves both the tool that generates
-	imagery and the one that reworks existing photos. A row with item_variant set is a
+	each column optional — so a single child table serves both image steps, and rows
+	written by older versions of either keep rendering. (`kind` and `brief` are what
+	the retired five-shot generator wrote; nothing produces them now.) A row with
+	item_variant set is a
 	variant's image (delivered to that variant's `variant_image` on approval); it
 	shares the listing's image_status rather than having a lifecycle of its own. The
 	per-variant observations land in the `variants` table, review material only.

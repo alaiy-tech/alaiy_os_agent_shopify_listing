@@ -4,7 +4,7 @@
 The `translate_product_images` tool: supplier photos with their printed Chinese
 text rendered into English.
 
-One of the two image steps this app ships. It does not generate new imagery — that
+One of the two image steps this app ships. It does not retouch photos — that
 is `generate_product_images`, a deliberately different capability. Both are always
 registered; the agent's prompt is what decides which it calls — see agent_meta.py.
 

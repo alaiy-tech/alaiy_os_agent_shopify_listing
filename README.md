@@ -84,7 +84,7 @@ and the Agents hub. This app owns agent definitions and their tools:
 | `prompts/system.md` | The vanilla system prompt — role, input contract, workflow, universal rules. A customer override is appended to it. |
 | `schemas/output.json` | The output schema the agent must return. |
 | `tools/handlers.py` | The four core tools. |
-| `tools/image_generation.py` | `generate_product_images` — a five-shot editorial set, via core's AI client seam. |
+| `tools/image_generation.py` | `generate_product_images` — every product photo retouched, via core's AI client seam. |
 | `tools/image_translation.py` | `translate_product_images` — supplier photo text into English, via core's AI client seam. |
 | `tools/images.py` | Shared image primitives both image tools are built from. |
 | `api.py` | `get_listing_agent`, what the desk surfaces ask, plus the bulk entry points. |
@@ -125,9 +125,11 @@ by the model's judgement — they act only when the product actually has a photo
 the request's toggle is true. Both **queue** their work rather than doing it: see
 "Images are produced after the listing" below.
 
-- `generate_product_images(briefs, …)` — the full editorial set (hero, detail, angle,
-  lifestyle, scale) in one call, every shot produced by *editing the product's real
-  photo* so it never invents a product from scratch.
+- `generate_product_images(…)` — every photo the product already has, retouched: the
+  same shot, cleaned up (lighting, colour, glare, dust, background). It composes
+  nothing and takes no briefs — the retouch instruction is a constant in the tool, so
+  the model cannot describe a piece into being re-rendered. A photo it has already
+  enhanced is never enhanced again.
 - `translate_product_images(…)` — each supplier photo's printed text rendered into
   English, the result re-hosted locally so it survives the vendor's URL expiring.
   A photo it has already translated is never translated again.
@@ -209,26 +211,23 @@ A listing is reviewable as soon as stage one finishes. A bulk batch reports
 `Completed` on the same basis, with `images_pending` saying how many of its products
 are still having pictures made.
 
-**Translation is never paid for twice.** Re-running the agent over a product whose
-photos were already translated reuses those results instead of sending them back to
+**Neither step is ever paid for twice.** Re-running the agent over a product whose
+photos were already translated (or enhanced) reuses those results instead of sending them back to
 the service — per photo, not per product, so a listing that gained a photo pays only
-for the new one. "Already translated" means the listing holds a translated image for
-that source photo, which makes the retry case fall out for free: a photo that failed
-has no url, so it is not already translated and gets another attempt. The reused
+for the new one. "Already done" means the listing holds a result for that
+source photo, which makes the retry case fall out for free: a photo that failed has
+no url, so it is not already done and gets another attempt. The reused
 entries are *returned* by the tool rather than skipped, because `save_listing`
 rebuilds the image table from what the run reports — a translation left out would be
 erased from the listing.
 
-Image *generation* is deliberately not deduplicated the same way: each run writes
-fresh briefs, so re-running is a request for new imagery rather than a repeat of the
-old.
-
-**Translation covers the variants too, and does not trust the model to say so.** One
-`translate_product_images` call takes the listing's own photos *and* every enabled
-variant's `variant_image`, with no per-product cap — a variant left with Chinese text
-on its photo is worse than the cost of translating it. A photo shared by the listing
-and a variant (or by two variants) is translated **once** and written to every row
-that uses it, each row carrying the `item_variant` it belongs to.
+**Both steps cover the variants too, and neither trusts the model to say so.** One
+`translate_product_images` or `generate_product_images` call takes the listing's own
+photos *and* every enabled variant's `variant_image`, with no per-product cap — a
+variant left with Chinese text on its photo, or left as the only unretouched picture
+on the listing, is worse than the cost of processing it. A photo shared by the
+listing and a variant (or by two variants) is processed **once** and written to every
+row that uses it, each row carrying the `item_variant` it belongs to.
 
 Which photo belongs to which variant is settled in the tool and travels with the
 queued job, so stage two writes those rows from that plan rather than from the
