@@ -53,7 +53,7 @@
   },
   "images": {
    "type": "array",
-   "description": "Images produced by the image step, for the listing's `images` table, in the order the tool returned them \u2014 copy its result entries verbatim. An empty array when no image step ran, when the product has no photos, or when the per-request image toggle was off.",
+   "description": "Images produced by the image step, for the listing's `images` table, in the order the tool returned them \u2014 copy its result entries verbatim EXCEPT for `brief`, which you must leave out entirely: it is already recorded against the image and repeating it here would be rejected. An empty array when no image step ran, when the product has no photos, or when the per-request image toggle was off.",
    "items": {
     "type": "object",
     "additionalProperties": false,
@@ -79,10 +79,6 @@
        "null"
       ],
       "description": "The resulting image, or null. Null is the normal case: the image step queues the work and it is rendered in the background after this run finishes, then attached to the listing. Copy null through as-is \u2014 it does not mean the image failed, and it does not belong in needs_review."
-     },
-     "brief": {
-      "type": "string",
-      "description": "The instruction used to produce this image, where the image step takes one."
      },
      "note": {
       "type": [
