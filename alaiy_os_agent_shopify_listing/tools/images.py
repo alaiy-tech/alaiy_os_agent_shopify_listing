@@ -3,12 +3,19 @@
 """
 Image plumbing shared by the agent's two image tools.
 
-Nothing here is a tool: these are the primitives the image tools are built out of. The base app deliberately ships NO image tool of its own — producing
-imagery always means a third-party service with its own credentials and its own
-notion of what "the image step" is (The Solist generates editorial shots; naya
-translates the Chinese text printed on supplier photos). That belongs in the
-customer app. What is genuinely common is everything around it: turning a photo
-into something the model can see, and re-hosting a result so it survives.
+Nothing here is a tool: these are the primitives the image tools are built out
+of. The base app deliberately ships NO image tool of its own — what counts as
+"the image step" differs per customer (The Solist generates editorial shots; naya
+translates the Chinese text printed on supplier photos), and that judgement
+belongs in the customer app. What is genuinely common is everything around it:
+turning a photo into something the model can see, and re-hosting a result so it
+survives.
+
+The provider CALLS are no longer part of that split. Both image steps now go
+through Alaiy OS core's `ai_client` seam, so no app on the bench holds a provider
+credential or speaks a provider's wire format — the managed client serves both
+via the billing service. What stays here is the local half the seam cannot do:
+reading a Frappe File, and writing one back.
 
 Names here are public (no leading underscore) because the tool modules import them.
 """

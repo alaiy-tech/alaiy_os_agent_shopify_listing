@@ -84,8 +84,8 @@ and the Agents hub. This app owns agent definitions and their tools:
 | `prompts/system.md` | The vanilla system prompt — role, input contract, workflow, universal rules. A customer override is appended to it. |
 | `schemas/output.json` | The output schema the agent must return. |
 | `tools/handlers.py` | The four core tools. |
-| `tools/image_generation.py` | `generate_product_images` — a five-shot editorial set (gpt-image-1). |
-| `tools/image_translation.py` | `translate_product_images` — supplier photo text into English (alphashop). |
+| `tools/image_generation.py` | `generate_product_images` — a five-shot editorial set, via core's AI client seam. |
+| `tools/image_translation.py` | `translate_product_images` — supplier photo text into English, via core's AI client seam. |
 | `tools/images.py` | Shared image primitives both image tools are built from. |
 | `api.py` | `get_listing_agent`, what the desk surfaces ask, plus the bulk entry points. |
 | `bulk.py` | Bulk enrichment: chunks a batch across Frappe workers, one run per product. |
@@ -127,11 +127,10 @@ the request's toggle is true. Both **queue** their work rather than doing it: se
 
 - `generate_product_images(briefs, …)` — the full editorial set (hero, detail, angle,
   lifestyle, scale) in one call, every shot produced by *editing the product's real
-  photo* so it never invents a product from scratch. Needs `openrouter_api_key`.
+  photo* so it never invents a product from scratch.
 - `translate_product_images(…)` — each supplier photo's printed text rendered into
   English, the result re-hosted locally so it survives the vendor's URL expiring.
-  A photo it has already translated is never translated again. Needs
-  `alphashop_ak` / `alphashop_sk`.
+  A photo it has already translated is never translated again.
 
 Both are registered always and both are offered as a toggle on the desk surfaces; the
 prompt is what tells the agent which one belongs to this store. They share
@@ -149,10 +148,19 @@ bench get-app $URL_OF_THIS_REPO --branch main
 bench --site $SITE install-app alaiy_os_agent_shopify_listing
 ```
 
-The engine's `anthropic_api_key` is managed by Alaiy OS core, not by this app. The
-image tools read their own keys from `site_config.json` —
-`openrouter_api_key` for generation, `alphashop_ak` / `alphashop_sk` for
-translation. Only the tool a site actually uses needs its key.
+This app holds no credentials. Everything — the agent's text turns and both image
+tools — goes through Alaiy OS core's `ai_client` seam, so whichever client is
+installed supplies the key:
+
+- **Managed** (`alaiy_os_ai_client` installed): text routes through the LiteLLM
+  gateway, images through the billing service, which owns both provider keys and
+  meters image spend against the same per-site balance. Nothing to configure.
+- **BYOK**: core's default client uses the site's own `ai_api_key` for text and
+  `openrouter_api_key` for image generation. Image *translation* is not available
+  on BYOK — the tool reports that rather than half-working.
+
+Whether a site can do either is checked before the agent commits to imagery, via
+the seam's `image_support()`.
 
 ### Running the agent
 

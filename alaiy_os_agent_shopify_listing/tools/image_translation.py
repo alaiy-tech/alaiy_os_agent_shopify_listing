@@ -7,7 +7,12 @@ text rendered into English.
 One of the two image steps this app ships. It does not generate new imagery — that
 is `generate_product_images`, a deliberately different capability. Both are always
 registered; the agent's prompt is what decides which it calls — see agent_meta.py.
-Requires `alphashop_ak` / `alphashop_sk` in site_config.json.
+
+The translation itself goes through Alaiy OS core's `ai_client` seam
+(`llm.translate_image`), the same seam the agent's text turns use. This app holds
+no vendor credential: on a managed bench the call is served by the billing
+service, which owns the alphashop key and meters the spend. A BYOK bench has no
+translation provider and the tool reports that rather than half-working.
 
 Each translated photo is stored as its own public File, so the original supplier
 photo is never overwritten and a bad translation is always recoverable.
@@ -18,11 +23,10 @@ actual work is `render_translated`, which runs later on the image queue — see
 image_stage.py for why.
 """
 
-import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
 
 import frappe
+from alaiy_os.engine import llm
 
 from alaiy_os_agent_shopify_listing import image_stage
 from alaiy_os_agent_shopify_listing.tools import handlers as base
@@ -47,130 +51,6 @@ _QUEUED_NOTE = "Being translated in the background; the image will appear here w
 # it explains why this one has a url when its siblings do not.
 _REUSED_NOTE = "Translated on an earlier run; reused rather than translated again."
 
-# ── alphashop image translation ───────────────────────────────────────────────
-# Chinese text printed on supplier photos → English, via alphashop's
-# ai.image.translateImage API. Auth is a short-lived HS256 JWT signed with an
-# access key / secret key pair, both read from site_config.json:
-#
-#   "alphashop_ak": "..."
-#   "alphashop_sk": "..."
-#   "alphashop_base_url": "https://api.alphashop.cn"   (optional override)
-#
-# IMPORTANT: this API fetches the image itself from the `imageUrl` we send, so that
-# URL must be reachable from alphashop's servers. Supplier CDN URLs (the normal
-# case for Nayaglobal, whose images come from Alibaba's CDN) work as-is; a photo
-# stored as a local Frappe File only works when the site is publicly reachable —
-# see images.public_image_url.
-#
-# alphashop also offers ai.image.imageObjectExtraction (white-background removal).
-# Deliberately not wired up: out of scope for now.
-_ALPHASHOP_BASE_URL = "https://api.alphashop.cn"
-_ALPHASHOP_TRANSLATE_PATH = "/ai.image.translateImage/1.0"
-_ALPHASHOP_AK_KEY = "alphashop_ak"
-_ALPHASHOP_SK_KEY = "alphashop_sk"
-_ALPHASHOP_BASE_URL_KEY = "alphashop_base_url"
-
-# JWT lifetime, and a little backdating so minor clock skew doesn't reject us.
-_JWT_TTL_SECONDS = 1800
-_JWT_LEEWAY_SECONDS = 5
-
-# Per-image retry policy for the translate call.
-_TRANSLATE_MAX_RETRIES = 3
-_TRANSLATE_RETRY_DELAYS = (2, 4, 8)
-
-
-def _alphashop_headers(ak, sk):
-	"""
-	Auth headers for alphashop: a short-lived HS256 JWT signed with the secret key,
-	issued by the access key. Minted per attempt rather than reused, so a retry after
-	a long backoff never sends a token that has since expired.
-
-	PyJWT ships with Frappe, so this adds no dependency.
-	"""
-	import jwt
-
-	now = datetime.now(timezone.utc)
-	token = jwt.encode(
-		{
-			"iss": ak,
-			"exp": now + timedelta(seconds=_JWT_TTL_SECONDS),
-			"nbf": now - timedelta(seconds=_JWT_LEEWAY_SECONDS),
-		},
-		sk,
-		algorithm="HS256",
-		headers={"alg": "HS256"},
-	)
-	if isinstance(token, bytes):
-		token = token.decode("utf-8")
-	return {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
-
-
-def _alphashop_translate_image(image_url, ak, sk, base_url):
-	"""
-	One image through alphashop's ai.image.translateImage API. Returns the URL of
-	the translated image.
-
-	This is the ONLY place the alphashop request/response contract is expressed. The
-	response nests the payload two levels deep — result.result — with the outer
-	block carrying retCode/retMsg when the call fails logically despite a 200.
-	Retries with exponential backoff; raises once retries are exhausted so the
-	caller can record the failure against that one photo.
-	"""
-	import requests
-
-	endpoint = base_url.rstrip("/") + _ALPHASHOP_TRANSLATE_PATH
-	body = {
-		"imageUrl": image_url,
-		"sourceLanguage": "zh",
-		"targetLanguage": "en",
-		"includingProductArea": True,
-		"useImageEditor": True,
-		"translatingBrandInTheProduct": True,
-	}
-
-	last_err = None
-	for attempt in range(_TRANSLATE_MAX_RETRIES):
-		try:
-			resp = requests.post(
-				endpoint, headers=_alphashop_headers(ak, sk), json=body, timeout=30
-			)
-			if not (resp.headers.get("Content-Type") or "").startswith("application/json"):
-				raise RuntimeError(f"non-JSON response: {resp.text[:200]}")
-
-			data = resp.json()
-			result_block = data.get("result")
-			if not isinstance(result_block, dict):
-				# A null result with a top-level resultCode is how alphashop reports
-				# most failures. FAIL_SERVER_INTERNAL_ERROR in particular is what you
-				# get when it could not fetch `imageUrl` at all — so say so, since the
-				# code alone points at their server rather than at our unreachable URL.
-				code = data.get("resultCode") or "unknown"
-				hint = ""
-				if code == "FAIL_SERVER_INTERNAL_ERROR":
-					hint = (
-						f" — most often this means alphashop could not fetch the image;"
-						f" check that {image_url} is publicly reachable and returns an image"
-					)
-				raise RuntimeError(f"{code} (requestId={data.get('requestId')}){hint}")
-
-			translated = (result_block.get("result") or {}).get("translatedImageUrl")
-			if not translated:
-				raise RuntimeError(
-					f"no translatedImageUrl (retCode={result_block.get('retCode')}, "
-					f"retMsg={result_block.get('retMsg', 'Unknown error')})"
-				)
-			return translated
-
-		except Exception as exc:
-			last_err = exc
-			if attempt < _TRANSLATE_MAX_RETRIES - 1:
-				time.sleep(_TRANSLATE_RETRY_DELAYS[min(attempt, len(_TRANSLATE_RETRY_DELAYS) - 1)])
-
-	raise RuntimeError(
-		f"alphashop translate failed after {_TRANSLATE_MAX_RETRIES} attempts: {last_err}"
-	)
-
-
 def translate_product_images(item_code=None, image_urls=None, translate_images=False):
 	"""
 	Queue a product's supplier photos to have their printed Chinese text rendered
@@ -182,8 +62,8 @@ def translate_product_images(item_code=None, image_urls=None, translate_images=F
 	image_stage.run_step, and attached to the listing then. That is by design — the
 	translation service takes minutes, and holding the run open for it would block
 	a worker that could be enriching other products. The work itself is
-	render_translated() below, which calls alphashop's ai.image.translateImage API
-	and re-hosts each result.
+	render_translated() below, which goes through core's `ai_client` seam
+	(llm.translate_image) and re-hosts each result.
 
 	EVERY photo is translated: the listing's own PLUS each enabled variant's
 	`variant_image`, under the one toggle, with no per-product cap. A URL shared by
@@ -260,14 +140,16 @@ def translate_product_images(item_code=None, image_urls=None, translate_images=F
 			),
 		}
 
-	ak = frappe.conf.get(_ALPHASHOP_AK_KEY)
-	sk = frappe.conf.get(_ALPHASHOP_SK_KEY)
-	if not ak or not sk:
+	# Checked while the model is still listening, rather than leaving it to
+	# discover a misconfigured site minutes later in the background. Only the
+	# capability is checked, not a credential — the credential lives off-bench now.
+	if not llm.image_client().image_support().get("translate"):
 		frappe.throw(
-			f"Image translation is not configured (set {_ALPHASHOP_AK_KEY} and "
-			f"{_ALPHASHOP_SK_KEY} in site_config.json). Do NOT retry; return each "
-			"image with url=null so the team can translate it manually."
+			"Image translation is not available on this site (the active AI client "
+			"cannot translate images). Do NOT retry; return each image with url=null "
+			"so the team can translate it manually."
 		)
+
 	# A URL-only product has no Shopify Enriched Listing for stage two to patch, so
 	# there is nowhere to deliver the results later — translate inline, as before.
 	if not item_code:
@@ -377,26 +259,23 @@ def render_translated(item_code, work):
 	urls = work.get("urls") or []
 	targets = work.get("targets")
 
-	ak = frappe.conf.get(_ALPHASHOP_AK_KEY)
-	sk = frappe.conf.get(_ALPHASHOP_SK_KEY)
 	# Only a job with something left to translate needs the service. A job queued
 	# purely to write an earlier run's results back onto the listing must not fail
-	# because the keys have since been removed.
-	if urls and (not ak or not sk):
-		frappe.throw(
-			f"Image translation is not configured (set {_ALPHASHOP_AK_KEY} and {_ALPHASHOP_SK_KEY})."
-		)
-	base_url = frappe.conf.get(_ALPHASHOP_BASE_URL_KEY) or _ALPHASHOP_BASE_URL
+	# because the capability has since gone away.
+	client = llm.image_client() if urls else None
+	if urls and not client.image_support().get("translate"):
+		frappe.throw("Image translation is not available on this site.")
 
-	# Resolved on this thread: expanding a local File path needs the site context.
+	# Both resolved on THIS thread, before the pool starts: the client reads site
+	# config and the Frappe hook registry, and expanding a local File path needs
+	# the site context. Neither works inside a worker thread — the client instance
+	# is thread-safe by contract once built.
 	sources = [(url, images.public_image_url(url)) for url in urls]
 
 	results = []
 	if sources:
 		with ThreadPoolExecutor(max_workers=min(_RENDER_CONCURRENCY, len(sources))) as pool:
-			results = list(
-				pool.map(lambda pair: _try_translate(pair[1], ak, sk, base_url), sources)
-			)
+			results = list(pool.map(lambda pair: _try_translate(client, pair[1]), sources))
 
 	# What this run produced, per photo. The fan-out onto each use of the photo
 	# happens below, so a shared photo is stored once here.
@@ -445,18 +324,19 @@ def render_translated(item_code, work):
 	return {"images": out, "image_tokens": 0}
 
 
-def _try_translate(public_url, ak, sk, base_url):
+def _try_translate(client, public_url):
 	"""One photo, in a worker thread. Returns (payload, error) — never raises.
 
 	Both the translate call and the fetch of its result are pure HTTP, so both
 	belong here; nothing in this function touches Frappe, which has no context in
-	a worker thread. Re-hosting the bytes is the caller's job.
+	a worker thread. The client was built on the calling thread and is thread-safe
+	by contract. Re-hosting the bytes is the caller's job.
 	"""
 	try:
-		# alphashop fetches the image itself, so hand it an absolute URL.
-		translated_url = _alphashop_translate_image(public_url, ak, sk, base_url)
-		# Re-host the result: alphashop's URL is theirs and may expire, and we want
-		# the reviewed listing to keep working regardless.
-		return images.fetch_image_bytes(translated_url), None
+		# The provider fetches the image itself, so hand it an absolute URL.
+		result = client.translate_image(public_url)
+		# Re-host the result: the provider's URL is theirs and may expire, and we
+		# want the reviewed listing to keep working regardless.
+		return images.fetch_image_bytes(result["translated_url"]), None
 	except Exception as exc:
 		return None, str(exc)

@@ -235,7 +235,7 @@ def tool_catalog(output_schema):
 		"translate_product_images": {
 			"description": (
 				"Translate the text printed on the product's supplier photos into "
-				"English, via alphashop's image translation API. Call it ONCE for the "
+				"English. Call it ONCE for the "
 				"whole product — it covers the listing's photos AND each variant's "
 				"own photo in that one call. Whether images are actually translated "
 				"is decided by the tool itself, NOT by you: it runs ONLY when the "
@@ -396,9 +396,11 @@ def build_agent_meta():
 	Registry (and its OS Agent Tool child rows): the vanilla agent, with this site's
 	override appended to its prompt.
 
-	Credentials are NOT part of this. Model access comes from Alaiy OS core (the
-	engine's anthropic_api_key); the image tools read their own keys from
-	site_config.json.
+	Credentials are NOT part of this, and this app holds none. Everything — the
+	agent's text turns and both image tools — goes through Alaiy OS core's
+	`ai_client` seam, so whichever client is installed supplies the credential:
+	the managed client routes text via the LiteLLM gateway and images via the
+	billing service, and a BYOK bench uses its own site_config keys.
 	"""
 	app, path = find_override()
 	meta, body = parse_override(path.read_text(encoding="utf-8")) if path else ({}, "")

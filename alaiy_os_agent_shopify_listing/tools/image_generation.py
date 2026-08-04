@@ -5,8 +5,13 @@ The `generate_product_images` tool: a five-shot editorial image set, produced by
 editing the product's real photo.
 
 One of the two image steps this app ships. Both are always registered; the agent's
-prompt is what decides which it calls — see agent_meta.py. Requires
-`openrouter_api_key` in site_config.json.
+prompt is what decides which it calls — see agent_meta.py.
+
+The rendering itself goes through Alaiy OS core's `ai_client` seam
+(`llm.generate_image`), the same seam the agent's text turns use. This app holds
+no provider credential and names no image model: on a managed bench the call is
+served by the billing service, which owns the key and meters the spend; on a BYOK
+bench core's default client uses that site's own `openrouter_api_key`.
 
 Two halves, split across two stages. `generate_product_images` runs inside the
 agent's run: it decides whether imagery happens at all, and queues it. The actual
@@ -18,14 +23,11 @@ import base64
 from concurrent.futures import ThreadPoolExecutor
 
 import frappe
+from alaiy_os.engine import llm
 
 from alaiy_os_agent_shopify_listing import image_stage
 from alaiy_os_agent_shopify_listing.tools import handlers as base
 from alaiy_os_agent_shopify_listing.tools import images
-
-# Image generation goes through OpenRouter's own Unified Image API
-# (POST /api/v1/images) — see _generate_one_image.
-_IMAGE_GEN_MODEL = "openai/gpt-image-1"
 
 _MAX_SHOTS = 5
 
@@ -38,31 +40,6 @@ _RENDER_CONCURRENCY = 5
 _QUEUED_NOTE = "Being produced in the background; the image will appear here when ready."
 
 
-def _generate_one_image(api_key, prompt, reference_data_uri):
-	"""One call to OpenRouter's Unified Image API. Returns (b64_json, media_type, usage)."""
-	import requests
-
-	payload = {"model": _IMAGE_GEN_MODEL, "prompt": prompt, "n": 1, "output_format": "png"}
-	if reference_data_uri:
-		payload["input_references"] = [
-			{"type": "image_url", "image_url": {"url": reference_data_uri}}
-		]
-
-	resp = requests.post(
-		"https://openrouter.ai/api/v1/images",
-		headers={"Authorization": f"Bearer {api_key}"},
-		json=payload,
-		timeout=180,
-	)
-	if resp.status_code != 200:
-		# A plain exception, not frappe.throw: this runs in a worker thread with no
-		# Frappe request context. render_generated turns it into a per-image note.
-		raise RuntimeError(f"Image generation failed ({resp.status_code}): {resp.text[:500]}")
-	data = resp.json()
-	image = data["data"][0]
-	return image["b64_json"], image.get("media_type", "image/png"), data.get("usage", {})
-
-
 def generate_product_images(briefs, item_code=None, reference_image_url=None, generate_images=False):
 	"""
 	Queue up to 5 editorial shots and return immediately. Each of `briefs` is
@@ -73,10 +50,8 @@ def generate_product_images(briefs, item_code=None, reference_image_url=None, ge
 	image_stage.run_step, and attached to the listing then. That is by design — a
 	five-shot set takes minutes, and holding the run open for it would block a
 	worker that could be enriching other products. The rendering itself is
-	render_generated() below, which goes to OpenRouter's Unified Image API (POST
-	/api/v1/images — a dedicated OpenRouter endpoint, NOT the OpenAI Images REST
-	API; confirmed live, the OpenAI SDK's images.generate / images.edit both 404
-	against OpenRouter) and saves each result as its own public File.
+	render_generated() below, which goes through core's `ai_client` seam
+	(llm.generate_image) and saves each result as its own public File.
 
 	The exception is a URL-only product: it has no listing record for stage two to
 	deliver into, so its images are rendered inline and come back with real urls.
@@ -99,9 +74,9 @@ def generate_product_images(briefs, item_code=None, reference_image_url=None, ge
 	downloaded — because a '/files/...' path isn't publicly fetchable and some CDNs
 	refuse fetches with no browser-like User-Agent (see images.reference_source).
 
-	If openrouter_api_key isn't configured (and both gates pass), the model is told
-	via the thrown message not to retry and to fall back to url=null placeholders
-	instead of stalling the rest of the listing.
+	If the site's AI client cannot generate images at all (and both gates pass),
+	the model is told via the thrown message not to retry and to fall back to
+	url=null placeholders instead of stalling the rest of the listing.
 	"""
 	# ── Gate 1 (airtight): resolve the original photo; no photo → no generation.
 	reference = None
@@ -125,13 +100,14 @@ def generate_product_images(briefs, item_code=None, reference_image_url=None, ge
 		)}
 
 	# Checked here, while the model is still listening, rather than leaving it to
-	# discover a misconfigured site minutes later in the background.
-	api_key = frappe.conf.get("openrouter_api_key")
-	if not api_key:
+	# discover a misconfigured site minutes later in the background. Only the
+	# capability is checked, not a credential — the credential lives off-bench now,
+	# behind the seam, so this app has nothing to inspect.
+	if not llm.image_client().image_support().get("generate"):
 		frappe.throw(
-			"Image generation is not configured (set openrouter_api_key in "
-			"site_config.json). Do NOT retry; return each image with url=null and "
-			"its brief so the team can shoot or generate it manually."
+			"Image generation is not available on this site (the active AI client "
+			"cannot generate images). Do NOT retry; return each image with url=null "
+			"and its brief so the team can shoot or generate it manually."
 		)
 
 	shots = [{"kind": entry["kind"], "brief": entry["brief"]} for entry in briefs[:_MAX_SHOTS]]
@@ -182,18 +158,19 @@ def render_generated(item_code, work):
 	service that takes about a minute each, and running them in sequence was the
 	single largest cost in the whole enrichment.
 	"""
-	api_key = frappe.conf.get("openrouter_api_key")
-	if not api_key:
-		frappe.throw("Image generation is not configured (set openrouter_api_key).")
-
-	# Resolved once, on this thread: it reads a File row or downloads the photo.
+	# Both resolved on THIS thread, before the pool starts: the client reads site
+	# config and the Frappe hook registry, and the reference reads a File row or
+	# downloads the photo. Neither is possible inside a worker thread, which has no
+	# Frappe request context — the client instance itself is thread-safe by
+	# contract once built (see alaiy_os/engine/ai_client.py).
+	client = llm.image_client()
 	reference_data_uri = images.reference_data_uri(work["reference"])
 	shots = work["briefs"]
 
 	with ThreadPoolExecutor(max_workers=min(_RENDER_CONCURRENCY, len(shots) or 1)) as pool:
 		results = list(
 			pool.map(
-				lambda shot: _try_generate(api_key, shot, reference_data_uri),
+				lambda shot: _try_generate(client, shot, reference_data_uri),
 				shots,
 			)
 		)
@@ -216,24 +193,28 @@ def render_generated(item_code, work):
 			})
 			continue
 
-		b64_data, media_type, usage = payload
-		total_tokens += usage.get("total_tokens", 0)
+		total_tokens += (payload.get("usage") or {}).get("total_tokens", 0)
 		# Saving writes a File row, so it stays on this thread too.
 		url = images.save_public_image(
-			f"listing-{shot['kind']}", base64.b64decode(b64_data), media_type
+			f"listing-{shot['kind']}",
+			base64.b64decode(payload["b64"]),
+			payload.get("media_type") or "image/png",
 		)
 		out.append({"kind": shot["kind"], "brief": shot["brief"], "url": url, "note": None})
 
 	return {"images": out, "image_tokens": total_tokens}
 
 
-def _try_generate(api_key, shot, reference_data_uri):
+def _try_generate(client, shot, reference_data_uri):
 	"""One shot, in a worker thread. Returns (payload, error) — never raises.
 
 	Nothing in here touches Frappe: the thread has no request context, so a
-	frappe.throw or a db read from inside it would fail in a confusing way.
+	frappe.throw or a db read from inside it would fail in a confusing way. The
+	client was built on the calling thread and is thread-safe by contract.
 	"""
 	try:
-		return _generate_one_image(api_key, shot["brief"], reference_data_uri), None
+		return client.generate_image(
+			shot["brief"], reference_data_uri=reference_data_uri
+		), None
 	except Exception as exc:
 		return None, str(exc)
