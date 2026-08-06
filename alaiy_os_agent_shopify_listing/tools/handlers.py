@@ -267,6 +267,7 @@ def get_reference_values():
 		"categories": _distinct_values(LISTING_DOCTYPE, "listing_category"),
 		"product_types": _distinct_values(LISTING_DOCTYPE, "listing_product_type"),
 		"attribute_keys": _distinct_values("Shopify Product Metafield", "key"),
+		"tags": _distinct_values("Shopify Tag", "tag_name"),
 	}
 
 
@@ -304,9 +305,11 @@ def save_listing(listing, item_code=None):
 
 	Every field written here corresponds to a field on the Shopify Product Listing
 	itself (title -> listing_title, description -> listing_description, category ->
-	listing_category, product_type -> listing_product_type, attributes -> metafields,
-	images -> images), plus the three review fields the approval step needs. The agent
-	produces nothing else.
+	listing_category, product_type -> listing_product_type, seo_title ->
+	listing_seo_title, seo_description -> listing_seo_description, attributes ->
+	metafields, images -> images) or on the Item (shopify_tags -> sh_shopify_tags —
+	tags are Item-level, not a listing field), plus the three review fields the
+	approval step needs. The agent produces nothing else.
 
 	List-valued fields (needs_review, notes) are flattened to one-per-line text for a
 	readable Desk form. The structured parts — attributes and per-variant
@@ -354,11 +357,14 @@ def save_listing(listing, item_code=None):
 	doc.description = listing.get("description")
 	doc.category = listing.get("category")
 	doc.product_type = listing.get("product_type")
+	doc.seo_title = listing.get("seo_title")
+	doc.seo_description = listing.get("seo_description")
 	doc.confidence = listing.get("confidence")
 
 	# list-valued fields -> one item per line for a readable Desk form
 	doc.needs_review = "\n".join(listing.get("needs_review") or [])
 	doc.notes = "\n".join(listing.get("notes") or [])
+	doc.shopify_tags = "\n".join(listing.get("shopify_tags") or [])
 
 	# structured attributes -> pretty JSON; whole payload kept verbatim for audit
 	doc.attributes_json = frappe.as_json(listing.get("attributes") or {})

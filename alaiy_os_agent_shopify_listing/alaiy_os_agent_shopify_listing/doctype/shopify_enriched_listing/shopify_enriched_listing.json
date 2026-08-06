@@ -16,6 +16,10 @@
   "title",
   "content_section",
   "description",
+  "seo_section",
+  "seo_title",
+  "seo_description",
+  "shopify_tags",
   "attributes_section",
   "attributes",
   "images_section",
@@ -98,6 +102,30 @@
    "fieldname": "description",
    "fieldtype": "Text",
    "label": "Description"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "seo_section",
+   "fieldtype": "Section Break",
+   "label": "SEO & Tags"
+  },
+  {
+   "description": "Mirrors the listing's `listing_seo_title` — the search-result snippet title, distinct from Title above.",
+   "fieldname": "seo_title",
+   "fieldtype": "Data",
+   "label": "SEO Title"
+  },
+  {
+   "description": "Mirrors the listing's `listing_seo_description` — the search-result snippet description, capped at 320 characters.",
+   "fieldname": "seo_description",
+   "fieldtype": "Small Text",
+   "label": "SEO Description"
+  },
+  {
+   "description": "One tag per line. Published to the Item's Shopify tag list (Item.sh_shopify_tags) on approval, self-healing any Shopify Tag master that does not exist locally yet.",
+   "fieldname": "shopify_tags",
+   "fieldtype": "Small Text",
+   "label": "Shopify Tags"
   },
   {
    "collapsible": 1,
@@ -219,7 +247,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-07-29 00:00:00",
+ "modified": "2026-08-06 00:00:00",
  "modified_by": "Administrator",
  "module": "Alaiy Os Agent Shopify Listing",
  "name": "Shopify Enriched Listing",

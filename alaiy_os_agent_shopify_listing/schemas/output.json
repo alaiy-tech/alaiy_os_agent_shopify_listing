@@ -18,6 +18,21 @@
    "type": "string",
    "description": "The product type, for the listing's `listing_product_type` \u2014 the specific noun for what this product IS (e.g. 'Bracelet', 'Backpack', 'Fountain Pen'), not a category path. Reuse an existing product type from get_reference_values when one fits."
   },
+  "seo_title": {
+   "type": "string",
+   "description": "For the listing's `listing_seo_title` \u2014 what shows in a search-engine result and browser tab. Short (aim for under 60 characters so it does not truncate), keyword-first, and may differ from `title` (which has to read well as on-page merchandising copy; this has to read well as a search snippet). Reuse the same search terms `title`/`description` are built around."
+  },
+  "seo_description": {
+   "type": "string",
+   "description": "For the listing's `listing_seo_description` \u2014 the search-result snippet. One or two plain-text sentences, no HTML, capped at 320 characters (Shopify's own limit). Summarise what the product is and its one or two most compelling, evidence-backed specifics \u2014 the same rule as `description` applies: never invent a spec not supported by the product data or photos."
+  },
+  "shopify_tags": {
+   "type": "array",
+   "items": {
+    "type": "string"
+   },
+   "description": "For the listing's Shopify tags (published via the Item's tag list, not a listing field). Reuse existing tags from get_reference_values verbatim when they apply \u2014 tags are how shoppers filter/browse, so near-duplicate spellings fragment that. Add a new tag only when nothing existing covers a genuinely distinguishing fact (brand, material, category, standout attribute). Lowercase, hyphenated style to match existing tags unless the store's existing tags show otherwise. Empty array when nothing applies."
+  },
   "attributes": {
    "type": "object",
    "additionalProperties": {
@@ -159,6 +174,9 @@
   "description",
   "category",
   "product_type",
+  "seo_title",
+  "seo_description",
+  "shopify_tags",
   "attributes",
   "images",
   "variants",
