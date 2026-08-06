@@ -47,13 +47,51 @@ class ShopifyEnrichedListing(Document):
 		listing_doc.listing_description = self.description
 		listing_doc.listing_category = self.category
 		listing_doc.listing_product_type = self.product_type
+		listing_doc.listing_seo_title = self.seo_title
+		listing_doc.listing_seo_description = self.seo_description
 
 		self._sync_images(listing_doc)
 		self._sync_variant_images(listing_doc)
 		self._sync_attributes_as_metafields(listing_doc)
 
 		listing_doc.save(ignore_permissions=True)
+
+		self._sync_tags()
+
 		frappe.db.commit()
+
+	def _sync_tags(self):
+		"""Push the enriched tag list onto the Item's Shopify tag list.
+
+		Tags are Item-level (`Item.sh_shopify_tags`, a Table MultiSelect of Item
+		Shopify Tag rows -> Shopify Tag), not a Shopify Product Listing field, so this
+		writes to a different doctype than `_push_to_listing`'s other syncs. Guarded
+		because Shopify Tag/Item Shopify Tag belong to the Shopify connector app and
+		may not be installed. Self-heals any Shopify Tag master that doesn't exist
+		locally yet, mirroring the connector's own import-side behaviour — a tag an
+		admin just approved should not silently fail to publish because nothing has
+		cached it before. A tag containing '<' or '>' is skipped (Frappe's own name
+		validation rejects those characters on a Shopify Tag insert).
+		"""
+		if not self.shopify_tags:
+			return
+		if not frappe.db.exists("DocType", "Shopify Tag") or not frappe.db.exists("Item", self.item_code):
+			return
+
+		tag_names = [t.strip() for t in self.shopify_tags.splitlines() if t.strip()]
+		usable = []
+		for tag_name in tag_names:
+			if "<" in tag_name or ">" in tag_name:
+				continue
+			if not frappe.db.exists("Shopify Tag", tag_name):
+				frappe.get_doc({"doctype": "Shopify Tag", "tag_name": tag_name}).insert(
+					ignore_permissions=True
+				)
+			usable.append(tag_name)
+
+		item = frappe.get_doc("Item", self.item_code)
+		item.set("sh_shopify_tags", [{"shopify_tag": t} for t in usable])
+		item.save(ignore_permissions=True)
 
 	def _sync_images(self, listing_doc):
 		"""Map enriched listing images to Shopify listing images.
