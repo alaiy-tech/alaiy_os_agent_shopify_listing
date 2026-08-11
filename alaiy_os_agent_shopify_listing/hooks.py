@@ -10,7 +10,35 @@ app_license = "agpl-3.0"
 # ---------------------------------------------------------------------------
 # The agent engine, OS Agent Registry and OS Agent Run all live in alaiy_os.
 # erpnext supplies the Item / Brand / Item Group the tools read.
+#
+# frappe_assistant_core is deliberately NOT listed: the assistant_tools entries
+# below are dotted-path strings that only FAC's custom_tools plugin ever
+# resolves, so on a site without FAC this app's assistant_tools/ package is
+# never imported and the agent works exactly as before.
 required_apps = ["alaiy_os", "erpnext"]
+
+# ---------------------------------------------------------------------------
+# MCP tools (Frappe Assistant Core)
+# ---------------------------------------------------------------------------
+# These tools drive THIS agent and read the Shopify Enriched Listing DocType
+# defined here, so they live with the agent rather than in alaiy_os: install the
+# agent and its MCP surface arrives with it; uninstall it and the surface leaves.
+# They subclass alaiy_os.assistant_tools._base.AlaiyTool for role gating and
+# result envelopes. The generic commerce tools live in alaiy_os itself.
+assistant_tools = [
+    "alaiy_os_agent_shopify_listing.assistant_tools.run_enrichment_agent.RunEnrichmentAgent",
+    "alaiy_os_agent_shopify_listing.assistant_tools.get_agent_suggestions.GetAgentSuggestions",
+    "alaiy_os_agent_shopify_listing.assistant_tools.approve_suggestion.ApproveSuggestion",
+]
+
+# Per-tool role allow-list, merged into alaiy_os's permission model by Frappe's
+# dict-hook aggregation (alaiy_os.assistant_tools.permissions.roles_for). The
+# superuser roles (System Manager / OS Manager / Alaiy Admin) are implicit.
+assistant_tool_roles = {
+    "run_enrichment_agent": ["Alaiy Catalogue"],
+    "get_agent_suggestions": ["Alaiy Catalogue"],
+    "approve_suggestion": ["Alaiy Catalogue"],
+}
 
 # ---------------------------------------------------------------------------
 # Desk surfaces
