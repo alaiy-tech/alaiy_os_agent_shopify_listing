@@ -24,9 +24,11 @@ Every product in the CSV is marked. The `Needs Review` column -- the agent's own
 list of attributes it could not fill confidently -- is reported but not acted on;
 pass --skip-needs-review to leave those products alone instead.
 
-Dry-run first, then apply:
-    cd sites && ../env/bin/python ../apps/alaiy_os_agent_shopify_listing/scripts/mark_listings_enriched.py <site_name> --csv ../apps/alaiy_os_agent_shopify_listing/scripts/data/product_shopify_ready.csv --dry-run
-    cd sites && ../env/bin/python ../apps/alaiy_os_agent_shopify_listing/scripts/mark_listings_enriched.py <site_name> --csv ../apps/alaiy_os_agent_shopify_listing/scripts/data/product_shopify_ready.csv --apply
+Runnable from any directory (it finds the bench itself). Dry-run first, then apply:
+    ~/alaiy_os_bench/env/bin/python scripts/mark_listings_enriched.py <site_name> --dry-run
+    ~/alaiy_os_bench/env/bin/python scripts/mark_listings_enriched.py <site_name> --apply
+
+--csv defaults to the export committed beside this script under scripts/data/.
 """
 import argparse
 import csv
@@ -108,7 +110,29 @@ def resolve_listings(key):
 	return rows
 
 
+def bench_sites_dir():
+	"""The bench's sites/ directory, derived from this file's location.
+
+	frappe.init() resolves sites/ relative to the current directory, and its
+	logger resolves the bench path as '..' from it, so frappe only works with the
+	sites dir as cwd. Rather than make that the caller's problem, walk up from
+	apps/<app>/scripts/ to the bench and chdir there -- the script then runs from
+	anywhere with just a site name.
+	"""
+	bench = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+	return os.path.join(bench, "sites")
+
+
 def main(site, csv_path, apply_changes=False, skip_needs_review=False):
+	# Before chdir, or a relative --csv would resolve against the sites dir.
+	csv_path = os.path.abspath(csv_path)
+
+	sites = bench_sites_dir()
+	if not os.path.isdir(sites):
+		print(f"Could not find the bench sites directory at {sites} -- run this from the bench's sites dir.")
+		sys.exit(1)
+	os.chdir(sites)
+
 	frappe.init(site=site)
 	frappe.connect()
 
