@@ -87,7 +87,7 @@ and the Agents hub. This app owns agent definitions and their tools:
 | `tools/image_generation.py` | `generate_product_images` — every product photo retouched, via core's AI client seam. |
 | `tools/image_translation.py` | `translate_product_images` — supplier photo text into English, via core's AI client seam. |
 | `tools/images.py` | Shared image primitives both image tools are built from. |
-| `api.py` | `get_listing_agent`, what the desk surfaces ask, plus the bulk entry points. |
+| `api.py` | `get_listing_agent`, what the desk surfaces ask, plus the bulk entry points and the per-photo `enrich_listing_image`. |
 | `bulk.py` | Bulk enrichment: chunks a batch across Frappe workers, one run per product. |
 | `image_stage.py` | Stage two: the images, rendered on their own queue after the listing is saved. |
 | `public/js/listing_agent.js` | The agent and its toggle fields, shared by every desk surface. |
@@ -180,6 +180,43 @@ GET  /api/method/alaiy_os.api.agents.get_run     {"run": "RUN-..."}             
 
 On success `output` is a JSON object matching `schemas/output.json`, and the
 same object has been persisted as a `Shopify Enriched Listing` for review.
+
+### Retouching one photo
+
+There is one endpoint that runs a single tool rather than the agent — for a
+per-photo **Enrich** button, where someone is looking at one picture on a product
+and wants that picture cleaned up. It changes nothing else about the listing.
+
+```
+POST /api/method/alaiy_os_agent_shopify_listing.api.enrich_listing_image
+     {"item_code": "SH-123", "source_url": "https://cdn.../a.jpg"}   -> {image_status: "Queued", queued: true, url: null, targets: 2}
+
+GET  /api/method/alaiy_os_agent_shopify_listing.api.get_listing_images
+     {"item_code": "SH-123"}                                         -> {image_status, image_error, image_tokens, images: [...]}
+```
+
+It queues like everything else here — the retouched photo arrives on the listing
+a minute or so later — so the caller polls `get_listing_images`.
+
+**Poll the row, not the listing.** `image_status` belongs to the whole listing,
+and several photos can be in flight at once: the first to finish flips it to
+`Ready` while the others are still rendering. A UI waiting on one photo watches
+for that photo's own row to get a `url` (or a `note` saying why it never will).
+
+The rest of the contract:
+
+- `source_url` must be a photo the product actually has — its own image or an
+  enabled variant's. Anything else is refused, so this cannot be used as a
+  general "render me this url" service.
+- A photo used in several places is rendered **once** and written to every row
+  that references it, each keeping its own `item_variant`. `targets` says how
+  many rows the call will fill.
+- Already retouched? Nothing is spent and the existing photo comes straight back
+  with `queued: false`. `force=1` re-renders it anyway, to redo a bad result.
+- A product with no `Shopify Enriched Listing` gets a **Draft** one holding just
+  the image — deliberately not `Needs Review`, so retouching a photo does not put
+  a contentless listing in front of a reviewer.
+- Nothing reaches Shopify. As always, that happens on approval.
 
 ### Images are produced after the listing
 

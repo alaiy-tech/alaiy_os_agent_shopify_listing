@@ -36,6 +36,7 @@ image_stage.py for why.
 """
 
 import base64
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 
 import frappe
@@ -99,6 +100,8 @@ def generate_product_images(
 	item_code=None,
 	image_urls=None,
 	generate_images=False,
+	source_urls=None,
+	force=False,
 	reference_image_url=None,
 	**_retired,
 ):
@@ -156,6 +159,15 @@ def generate_product_images(
 	via the thrown message not to retry and to fall back to url=null placeholders
 	instead of stalling the rest of the listing.
 
+	`source_urls` and `force` are for the per-photo endpoint
+	(api.enrich_listing_image), not for the model. They are deliberately absent from
+	the tool's declared schema in agent_meta.py, so a run can neither narrow the work
+	nor bypass gate 3 — an agent enriching a product always covers all of its photos,
+	and never pays twice. `source_urls` narrows the resolved targets to those photos
+	(every use of each still travels, so a shared photo still fills every row it
+	belongs to); `force` skips the gate 3 lookup so a photo a reviewer was unhappy
+	with can be rendered again.
+
 	`reference_image_url` and `**_retired` are compatibility, not API. This tool used
 	to take `briefs` and a single `reference_image_url`; a site whose OS Agent
 	Registry has not been re-synced since still advertises those, and a model will
@@ -185,6 +197,24 @@ def generate_product_images(
 		]
 	if not targets and image_urls:
 		targets = [{"source_url": u, "item_variant": None} for u in image_urls if u]
+
+	# Narrow to the photos a caller named, AFTER gate 1 resolved them from the
+	# product — so a named photo still has to be one this product actually has, and
+	# every use of it still travels. Filtering here rather than at the source keeps
+	# gate 1 airtight: nothing a caller passes can introduce a photo.
+	if source_urls is not None:
+		wanted = {url for url in source_urls if url}
+		narrowed = [target for target in targets if target["source_url"] in wanted]
+		if targets and not narrowed:
+			return {
+				"images": [],
+				"note": (
+					"None of the requested photos belong to this product, so nothing "
+					"was enhanced."
+				),
+			}
+		targets = narrowed
+
 	if not targets:
 		return {
 			"images": [],
@@ -230,7 +260,7 @@ def generate_product_images(
 	# ── Gate 3: never pay to enhance the same photo twice. Per photo URL, not per
 	# target: a URL shared by the listing and a variant is queued once, and stage two
 	# fills every row that references it.
-	done = _already_enhanced(item_code)
+	done = {} if force else already_enhanced(item_code)
 	todo = []
 	for target in targets:
 		url = target["source_url"]
@@ -243,7 +273,15 @@ def generate_product_images(
 	# because writing those rows back onto the listing is the job's other half, and
 	# reconciling them costs nothing when there is nothing left to render.
 	plan = [dict(target, url=done.get(target["source_url"])) for target in targets]
-	image_stage.queue_step(item_code, image_stage.GENERATE, {"urls": todo, "targets": plan})
+	image_stage.queue_step(
+		item_code,
+		image_stage.GENERATE,
+		{"urls": todo, "targets": plan},
+		# A whole-product run wants one job per product; a caller working photo by
+		# photo needs its photo to be the unit, or the second photo asked for gets
+		# swallowed as a duplicate of the first. See image_stage.queue_step.
+		job_key=_photo_job_key(source_urls) if source_urls is not None else None,
+	)
 
 	# The same plan, for the model to report. Every entry is returned — including the
 	# ones reused from an earlier run — because save_listing rebuilds the image table
@@ -288,7 +326,19 @@ def generate_product_images(
 	return result
 
 
-def _already_enhanced(item_code):
+def _photo_job_key(source_urls):
+	"""A stable job key for one specific set of photos — see image_stage.queue_step.
+
+	Derived from the urls themselves, and sorted, so the same photo asked for twice
+	produces the same key and collapses into the one job, while two different photos
+	get their own. Hashed rather than used raw because a job id is a Redis key and a
+	full CDN url is a poor one.
+	"""
+	joined = "\n".join(sorted(url for url in source_urls if url))
+	return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:12]
+
+
+def already_enhanced(item_code):
 	"""{source_url: url} for photos a previous run already enhanced.
 
 	"Already done" means the listing holds an enhanced image for that exact source

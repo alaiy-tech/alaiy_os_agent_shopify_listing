@@ -23,6 +23,8 @@ callbacks. Everything stage two needs travels in the job's own arguments; nothin
 reconstructed by guessing at saved rows.
 """
 
+import time
+
 import frappe
 
 ENRICHED_DOCTYPE = "Shopify Enriched Listing"
@@ -40,6 +42,20 @@ JOB_TIMEOUT = 1800
 # The two steps stage two knows how to render, mapped to the module that owns each.
 GENERATE = "generate"
 TRANSLATE = "translate"
+
+# How hard _apply tries when another job for the same product is writing at the same
+# time. Small numbers on purpose: the contention window is one document save, so a
+# collision that has not cleared in three tries is not contention any more.
+_APPLY_ATTEMPTS = 3
+_APPLY_BACKOFF = 0.5
+
+# What sits on a photo between someone asking for it and the result arriving. Read by
+# a human on the Desk form, so it says why the picture went away. Deliberately does
+# not say "again": the same clearing happens on a photo's first enhancement, because a
+# seeded row already holds the original, and a row that has been enhanced before —
+# and a note that guesses wrong about which is which is worse than one that does not
+# mention it.
+_RERENDER_NOTE = "Being enhanced in the background; the image will appear here when ready."
 
 
 def image_queue():
@@ -67,20 +83,28 @@ def image_queue():
 	return DEFAULT_QUEUE
 
 
-def queue_step(item_code, step, work):
+def queue_step(item_code, step, work, job_key=None):
 	"""Queue this product's image work, to run once the listing itself is saved.
 
 	Called by the image tools mid-run. `work` is everything the renderer needs —
 	the resolved photo urls and the plan of which row each belongs to — so stage two
 	never has to re-derive intent from what the model chose to write down.
+
+	`job_key` narrows what counts as "the same job". A run enriches the whole
+	product, so it passes nothing and gets one job per product: a second run queued
+	while the first is still waiting replaces nothing and adds nothing. A caller
+	working photo by photo (api.enrich_listing_image) passes a key derived from the
+	photo, because the product is the wrong unit for it — without one, asking for
+	photo B while photo A is still queued would be silently swallowed as a duplicate
+	and B would never render. With one, two photos queue independently while a
+	second click on the SAME photo still collapses into the first, which is the
+	de-duplication actually wanted there.
 	"""
 	frappe.enqueue(
 		"alaiy_os_agent_shopify_listing.image_stage.run_step",
 		queue=image_queue(),
 		timeout=JOB_TIMEOUT,
-		# One image job per product. A re-run that queues again while the first is
-		# still waiting replaces nothing and adds nothing.
-		job_id=f"listing-images::{item_code}",
+		job_id=f"listing-images::{item_code}" + (f"::{job_key}" if job_key else ""),
 		deduplicate=True,
 		item_code=item_code,
 		step=step,
@@ -88,6 +112,40 @@ def queue_step(item_code, step, work):
 		# Fires on save_listing's commit; discarded if the run rolls back first.
 		enqueue_after_commit=True,
 	)
+
+
+def clear_rendered(item_code, source_url):
+	"""Blank the result on every row for this photo, before deliberately redoing it.
+
+	`_match` only pairs a rendered image with a row that is empty or already holds
+	that exact url. That is what makes a re-delivery a no-op — but it also means a
+	re-render, whose url is by definition a new one, would match nothing and be
+	APPENDED beside the result it was meant to replace, leaving the listing with two
+	rows for the same photo. Emptying the rows first puts them back in the state
+	stage one would have left them in, so the new result lands where the old one was.
+
+	Written straight to the database, like _set_state and for the same reason: a
+	reviewer's own edits to the listing must survive.
+	"""
+	rows = frappe.get_all(
+		"Shopify Enriched Listing Image",
+		filters={
+			"parent": item_code,
+			"parenttype": ENRICHED_DOCTYPE,
+			"source_url": source_url,
+		},
+		pluck="name",
+	)
+	for name in rows:
+		frappe.db.set_value(
+			"Shopify Enriched Listing Image",
+			name,
+			# `kind` goes too: a seeded row is marked "hero" so an untouched photo
+			# publishes as the original it is, and a row about to hold a retouched
+			# photo must not keep claiming that.
+			{"url": None, "kind": None, "note": _RERENDER_NOTE},
+			update_modified=False,
+		)
 
 
 def run_step(item_code, step, work):
@@ -177,7 +235,27 @@ def _apply(item_code, rendered):
 	or its item_variant — would otherwise cost that variant its picture. Here the
 	plan the tool queued wins, and the listing ends up with the rows it should have
 	regardless of what the model reported.
+
+	Retried on a concurrent write. Photo-by-photo enrichment puts two jobs for the
+	same product on the queue at once (see queue_step), and both land here holding
+	their own copy of the document — the second to save would otherwise die on a
+	stale timestamp and lose an image already paid for. Each attempt re-reads the
+	document, so it sees the rows the other job just committed, and the writes are
+	per-row and idempotent, which is what makes retrying safe rather than merely
+	hopeful.
 	"""
+	for attempt in range(_APPLY_ATTEMPTS):
+		try:
+			return _apply_once(item_code, rendered)
+		except frappe.TimestampMismatchError:
+			frappe.db.rollback()
+			if attempt == _APPLY_ATTEMPTS - 1:
+				raise
+			time.sleep(_APPLY_BACKOFF * (attempt + 1))
+
+
+def _apply_once(item_code, rendered):
+	"""One attempt at _apply's load-modify-save."""
 	doc = frappe.get_doc(ENRICHED_DOCTYPE, item_code)
 	existing = list(doc.images or [])
 	produced = 0
@@ -239,10 +317,17 @@ def _set_state(item_code, status, error, tokens=None):
 
 	Loading a fresh doc to save one field would fight with `_apply`'s save, and the
 	reviewer's own edits to the listing must not be clobbered by a background job.
+
+	Tokens ACCUMULATE. A listing's image spend is the sum of everything ever rendered
+	for it, not the last thing rendered: photo-by-photo enrichment settles one job per
+	photo, and assigning would leave the listing reporting whichever photo happened to
+	finish last. The same applies to a re-run, which used to discard the earlier run's
+	recorded spend.
 	"""
 	values = {"image_status": status, "image_error": error}
 	if tokens:
-		values["image_tokens"] = tokens
+		spent = frappe.db.get_value(ENRICHED_DOCTYPE, item_code, "image_tokens") or 0
+		values["image_tokens"] = spent + tokens
 	frappe.db.set_value(ENRICHED_DOCTYPE, item_code, values, update_modified=False)
 	frappe.db.commit()
 

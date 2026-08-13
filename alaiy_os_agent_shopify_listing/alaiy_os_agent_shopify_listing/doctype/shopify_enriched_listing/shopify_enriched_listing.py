@@ -98,11 +98,20 @@ class ShopifyEnrichedListing(Document):
 
 		Variant images (rows with item_variant) are not listing images — they are
 		delivered by _sync_variant_images instead.
+
+		A row with no result falls back to the photo it was made from, published as
+		the original it is. This table REPLACES the listing's images rather than
+		adding to them, so skipping such a row does not leave the old photo alone —
+		it deletes it. Without the fallback, approving a listing whose imagery failed,
+		or is still rendering, would strip the product of the very photos the
+		enrichment was supposed to improve.
 		"""
 		listing_doc.set("images", [])
 
 		for idx, enriched_img in enumerate(self.images or []):
-			if not enriched_img.url or enriched_img.item_variant:
+			if enriched_img.item_variant:
+				continue
+			if not enriched_img.url and not enriched_img.source_url:
 				continue
 
 			source_map = {
@@ -111,9 +120,13 @@ class ShopifyEnrichedListing(Document):
 				"translated": "AI Enhanced",
 			}
 			source = source_map.get((enriched_img.kind or "").lower(), "AI Enhanced")
+			if not enriched_img.url:
+				# Falling back to the source photo: whatever the row was going to
+				# become, what is being published is the original.
+				source = "Original"
 
 			row = listing_doc.append("images", {
-				"image": enriched_img.url,
+				"image": enriched_img.url or enriched_img.source_url,
 				"source": source,
 				"sort_order": idx,
 				"generated_by_agent": self.name if source == "AI Enhanced" else None,
