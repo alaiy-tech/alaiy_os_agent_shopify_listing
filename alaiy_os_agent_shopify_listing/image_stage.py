@@ -114,8 +114,14 @@ def queue_step(item_code, step, work, job_key=None):
 	)
 
 
-def clear_rendered(item_code, source_url):
+def clear_rendered(item_code, source_url, note=_RERENDER_NOTE):
 	"""Blank the result on every row for this photo, before deliberately redoing it.
+
+	`note` is what the row says about itself while it holds no result. It defaults
+	to "being enhanced in the background" because that is the truth when a
+	re-render is about to follow, but a caller that is discarding a result for
+	good — reverting a photo to the original — must pass its own note rather than
+	leave the row claiming work is coming that never is.
 
 	`_match` only pairs a rendered image with a row that is empty or already holds
 	that exact url. That is what makes a re-delivery a no-op — but it also means a
@@ -143,7 +149,7 @@ def clear_rendered(item_code, source_url):
 			# `kind` goes too: a seeded row is marked "hero" so an untouched photo
 			# publishes as the original it is, and a row about to hold a retouched
 			# photo must not keep claiming that.
-			{"url": None, "kind": None, "note": _RERENDER_NOTE},
+			{"url": None, "kind": None, "note": note},
 			update_modified=False,
 		)
 

@@ -225,6 +225,63 @@ def enrich_listing_image(item_code, source_url, force=0):
 	}
 
 
+@frappe.whitelist(methods=["POST"])
+def revert_listing_image(item_code, source_url):
+	"""Discard the retouched version of ONE photo — the per-photo "revert to
+	original", the counterpart of enrich_listing_image.
+
+	    POST {"item_code": "SH-123", "source_url": "https://cdn.../a.jpg"}
+	    -> {item_code, source_url, reverted}
+
+	This is a real revert, not a preview: the rows for this photo are emptied, and
+	_sync_images publishes a row with no result as the photo it was made from. So
+	approving the listing afterwards keeps the original, exactly as though this
+	photo had never been enriched. Nothing else about the listing moves.
+
+	Free and idempotent — reverting a photo that holds no result is a no-op that
+	reports `reverted: 0` rather than throwing, so a double click costs nothing.
+
+	The render itself is NOT unspent: the money went when the image was made. To
+	get a retouched version back, call enrich_listing_image again, which will
+	render afresh because there is no longer a result to hand back.
+	"""
+	from alaiy_os_agent_shopify_listing import image_stage
+	from alaiy_os_agent_shopify_listing.tools import handlers as base
+
+	if not frappe.db.exists(base.LISTING_DOCTYPE, item_code):
+		frappe.throw(f"No {base.LISTING_DOCTYPE} found for item_code '{item_code}'.")
+	if not frappe.db.exists(ENRICHED_DOCTYPE, item_code):
+		# Never enriched, so there is nothing to take back. Not an error: the same
+		# "already in the state you asked for" answer as reverting an empty row.
+		return {"item_code": item_code, "source_url": source_url, "reverted": 0}
+
+	# check_permission("write"), not "read": this changes what approval will
+	# publish, so it needs the same rights as editing the enrichment by hand.
+	frappe.get_doc(ENRICHED_DOCTYPE, item_code).check_permission("write")
+
+	rows = frappe.get_all(
+		"Shopify Enriched Listing Image",
+		filters={"parent": item_code, "parenttype": ENRICHED_DOCTYPE, "source_url": source_url},
+		fields=["name", "url"],
+	)
+	if not rows:
+		frappe.throw(
+			f"'{source_url}' has no enriched version on {item_code}, so there is "
+			"nothing to revert."
+		)
+
+	filled = [row for row in rows if row.url]
+	if filled:
+		image_stage.clear_rendered(
+			item_code,
+			source_url,
+			note="Reverted to the original photo by a reviewer.",
+		)
+		frappe.db.commit()
+
+	return {"item_code": item_code, "source_url": source_url, "reverted": len(filled)}
+
+
 def _ensure_enriched_listing(item_code, listing):
 	"""The row stage two delivers into, seeded from the product if it has none.
 
