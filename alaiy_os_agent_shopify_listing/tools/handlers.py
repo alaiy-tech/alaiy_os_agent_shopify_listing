@@ -29,8 +29,11 @@ save_listing persists the finished enrichment into the Shopify Enriched Listing
 DocType in "Needs Review" status, for the admin to edit and approve.
 """
 
+import re
+
 import frappe
 
+from alaiy_os_agent_shopify_listing import matrix
 from alaiy_os_agent_shopify_listing.tools import images
 
 # Cap how many photos we send to the model to keep token/latency cost bounded.
@@ -290,6 +293,142 @@ def _flatten(value):
 	return frappe.as_json(value)
 
 
+def _flag(doc, text):
+	"""
+	Add one line to the reviewer's queue.
+
+	`needs_review` is how the admin learns what still needs a human, so anything
+	we correct, clamp or blank on the way in says so here. Rebuilt from the
+	agent's own list first, so re-running a product does not accumulate stale
+	flags.
+	"""
+	doc.needs_review = "\n".join(filter(None, [doc.needs_review, text]))
+
+
+def _select_value(doctype, fieldname, value):
+	"""
+	A Select field's value, or the closest legal one, plus whatever we rejected.
+
+	The output schema declares these as enums, but it reaches the model as a
+	Gemini function declaration, where an enum is advisory — so a model asked for
+	`high` will sometimes answer "high, because the photos agree". That used to
+	fail the whole save on a field nobody reviews, and the model's retry rebuilt
+	the payload and silently dropped six attributes it had already got right. So
+	take the leading token when it names a legal option and flag the rest: a
+	listing is worth more than one tidy field, and `output_json` keeps the
+	agent's exact words either way.
+
+	Options are read from the DocType, never duplicated here, so editing the
+	field cannot leave this behind.
+	"""
+	raw = _flatten(value)
+	if not raw:
+		return None, None
+
+	field = frappe.get_meta(doctype).get_field(fieldname)
+	allowed = [o.strip() for o in (field.options or "").split("\n") if o.strip()]
+	if raw in allowed:
+		return raw, None
+
+	head = re.split(r"[^A-Za-z0-9_-]+", raw.strip(), maxsplit=1)[0].lower()
+	for option in allowed:
+		if option.lower() == head:
+			return option, raw
+
+	return None, raw
+
+
+def _clamp_data(doctype, fieldname, value):
+	"""
+	A Data value cut to the column's width, and the length it was.
+
+	Same reasoning as _select_value: `title` is Data(140) and a model that writes
+	a 150-character title would otherwise fail the save and trigger the same
+	lossy retry. Truncating and saying so costs a few words; retrying costs the
+	attributes.
+	"""
+	raw = _flatten(value)
+	if not raw:
+		return raw, None
+
+	limit = frappe.get_meta(doctype).get_field(fieldname).length or 140
+	if len(raw) <= limit:
+		return raw, None
+	return raw[:limit], len(raw)
+
+
+def _apply_category_profile(doc, listing):
+	"""
+	Settle which of the client's categories this is — it decides which attributes
+	are mandatory, so nothing else can be checked until it is known.
+
+	The agent declares it (the field and its values come from the installed
+	matrix, see matrix.py). When it declares nothing usable we infer from the
+	taxonomy path and product type and record that we guessed, because "the agent
+	said Watches" and "we worked out Watches" are not the same claim. When even
+	that fails we say so in the reviewer's queue rather than quietly enforcing an
+	empty set of mandatory attributes.
+	"""
+	field = matrix.category_field()
+	meta = frappe.get_meta(ENRICHED_DOCTYPE)
+	if not field or not meta.has_field(field):
+		return
+
+	profiles = matrix.profiles()
+	declared = _flatten(listing.get(field))
+
+	if declared and declared in profiles:
+		value, source = declared, "agent"
+	else:
+		if declared:
+			_flag(doc, (
+				f"{matrix.category_label()} (the agent answered {declared!r}, which is not "
+				f"one of {', '.join(profiles)})"
+			))
+		value = matrix.resolve(
+			category=doc.category, product_type=doc.product_type, title=doc.title
+		)
+		source = "inferred" if value else None
+
+	doc.set(field, value)
+
+	source_field = matrix.category_source_field()
+	if source_field and meta.has_field(source_field):
+		doc.set(source_field, source)
+
+	if not value:
+		_flag(doc, (
+			f"{matrix.category_label()} (could not be determined, so the mandatory-attribute "
+			"check did not run — set it before approving)"
+		))
+
+
+def _flag_missing_mandatory(doc):
+	"""
+	The check the prompt describes and nothing used to enforce: every mandatory
+	attribute is either filled or named in `needs_review`.
+
+	Deliberately appends instead of refusing. Refusing means the model rebuilds
+	the payload, and rebuilding the payload is precisely what lost six good
+	attributes in the run that prompted this. A listing that reaches a reviewer
+	with gaps it can see beats a listing that lost the parts it got right.
+	"""
+	profile = doc.get(matrix.category_field() or "")
+	required = matrix.mandatory(profile, product_type=doc.product_type)
+	if not required:
+		return
+
+	filled = {row.key for row in doc.attributes if row.key and (row.value or "").strip()}
+	flagged = set(matrix.match_keys((doc.needs_review or "").splitlines()))
+
+	for key, label in required:
+		if key not in filled and key not in flagged:
+			_flag(doc, (
+				f"{label} (mandatory for {profile}; the agent put it in neither "
+				"attributes nor needs_review)"
+			))
+
+
 def save_listing(listing, item_code=None):
 	"""
 	Persist an enriched listing into the shared Shopify Enriched Listing DocType
@@ -331,6 +470,20 @@ def save_listing(listing, item_code=None):
 	shares the listing's image_status rather than having a lifecycle of its own. The
 	per-variant observations land in the `variants` table, review material only.
 
+	Nothing the model sends is allowed to fail this save if the listing can be
+	written at all. A value the DocType would reject is clamped and the reviewer
+	told (see _select_value, _clamp_data); a value that is really a note about
+	not having the value is blanked and flagged (matrix.is_placeholder); and any
+	mandatory attribute left out of both `attributes` and `needs_review` is
+	appended to `needs_review` (_flag_missing_mandatory). All of it exists
+	because the alternative — refusing the call — makes the model rebuild the
+	payload, and a rebuilt payload silently drops attributes it had already got
+	right. `output_json` keeps the agent's own words regardless, so a clamp
+	loses nothing but the reviewer's time.
+
+	Which attributes are mandatory is the client's business, not this app's: it
+	arrives through the `listing_attribute_matrix` hook. See matrix.py.
+
 	Returns {name, status, url} pointing at the new/updated record.
 	"""
 	item_code = item_code or (listing or {}).get("item_code")
@@ -353,18 +506,35 @@ def save_listing(listing, item_code=None):
 		doc.item_code = item_code
 
 	doc.status = "Needs Review"
-	doc.title = listing.get("title")
 	doc.description = listing.get("description")
 	doc.category = listing.get("category")
 	doc.product_type = listing.get("product_type")
 	doc.seo_title = listing.get("seo_title")
 	doc.seo_description = listing.get("seo_description")
-	doc.confidence = listing.get("confidence")
 
-	# list-valued fields -> one item per line for a readable Desk form
-	doc.needs_review = "\n".join(listing.get("needs_review") or [])
-	doc.notes = "\n".join(listing.get("notes") or [])
-	doc.shopify_tags = "\n".join(listing.get("shopify_tags") or [])
+	# Both of these are clamped rather than trusted, and both for the same
+	# reason: a value the DocType would reject fails the whole save, and the
+	# model's retry rebuilds the payload from scratch and loses attributes.
+	doc.title, overlong = _clamp_data(ENRICHED_DOCTYPE, "title", listing.get("title"))
+	doc.confidence, bad_confidence = _select_value(
+		ENRICHED_DOCTYPE, "confidence", listing.get("confidence")
+	)
+
+	# list-valued fields -> one item per line for a readable Desk form. Set before
+	# anything calls _flag, since every flag below appends to this.
+	doc.needs_review = "\n".join(_flatten(t) or "" for t in (listing.get("needs_review") or []))
+	doc.notes = "\n".join(_flatten(t) or "" for t in (listing.get("notes") or []))
+	doc.shopify_tags = "\n".join(_flatten(t) or "" for t in (listing.get("shopify_tags") or []))
+
+	if overlong:
+		_flag(doc, f"Title (the agent wrote {overlong} characters; it was cut to fit)")
+	if bad_confidence:
+		_flag(doc, (
+			f"Confidence (the agent answered {bad_confidence[:80]!r} instead of one word; "
+			"its full wording is in the raw output)"
+		))
+
+	_apply_category_profile(doc, listing)
 
 	# structured attributes -> pretty JSON; whole payload kept verbatim for audit
 	doc.attributes_json = frappe.as_json(listing.get("attributes") or {})
@@ -377,9 +547,37 @@ def save_listing(listing, item_code=None):
 	# ShopifyEnrichedListing._sync_attributes_as_metafields), so an edit made there
 	# reaches Shopify; the JSON fields beside them stay the agent's own words.
 	doc.set("attributes", [])
+	# What the agent already told the reviewer about, so a placeholder for a field
+	# it also listed in needs_review does not report the same field twice.
+	spoken_for = set(matrix.match_keys((doc.needs_review or "").splitlines()))
 	for key, value in (listing.get("attributes") or {}).items():
-		if key:
-			doc.append("attributes", {"key": key, "value": _flatten(value)})
+		if not key:
+			continue
+		text = _flatten(value)
+		if text is not None and not text.strip():
+			# An empty string is the model declining to answer, not an answer.
+			# Written as a row it reads as "considered and left blank", and the
+			# reviewer cannot tell it apart from a value someone cleared.
+			text = None
+		if matrix.is_placeholder(text):
+			# "Not provided in source data, will be determined upon manual
+			# review." is a note about the absence of a measurement, not a
+			# measurement. Left in place it counts as filled, hides the gap from
+			# the completeness check below -- and, because
+			# _sync_attributes_as_metafields only skips falsy values, publishes
+			# to the live storefront as a metafield when the listing is approved.
+			# The row stays so the reviewer sees an empty cell to fill, and
+			# attributes_json/output_json keep the agent's words verbatim.
+			if key not in spoken_for:
+				_flag(doc, f"{matrix.label(key)} (the agent gave a placeholder, not a value)")
+			text = None
+		if text is None:
+			# No value, so no row. The reviewer's grid is driven by the client's
+			# attribute matrix, not by which rows happen to exist, so a blank
+			# row adds nothing a reviewer can act on -- and the completeness
+			# pass below names it in needs_review if it is mandatory.
+			continue
+		doc.append("attributes", {"key": key, "value": text})
 
 	doc.set("variants", [])
 	for variant in (listing.get("variants") or []):
@@ -425,7 +623,26 @@ def save_listing(listing, item_code=None):
 		doc.image_status = "Not Required"
 	doc.image_error = None
 
-	doc.save(ignore_permissions=True)
+	_flag_missing_mandatory(doc)
+
+	try:
+		doc.save(ignore_permissions=True)
+	except frappe.exceptions.ValidationError as exc:
+		# The clamps above cover the cases we have actually seen. This is the
+		# backstop for the rest of the class, and its whole job is to stop the
+		# model treating "one field was wrong" as "write the listing again":
+		# that is what turned a bad `confidence` string into six lost attributes.
+		frappe.db.rollback()
+		frappe.throw(
+			"The listing was NOT saved. One field was rejected: "
+			f"{frappe.utils.strip_html(str(exc)).strip()}. Call save_listing again "
+			"with the IDENTICAL `listing` object and ONLY that field changed. Do "
+			"not rebuild the payload, do not re-derive or shorten `attributes`, "
+			"and never drop an attribute you already extracted. If you cannot "
+			"produce a valid value, send an empty string for that field and put "
+			"its name in `needs_review`."
+		)
+
 	frappe.db.commit()
 
 	return {
