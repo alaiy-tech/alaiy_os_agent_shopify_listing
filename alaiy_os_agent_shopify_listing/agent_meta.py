@@ -26,10 +26,13 @@ All tools are registered on every site. The prompt decides which get called, whi
 is why picking image translation over image generation is a sentence, not a setting.
 """
 
+import copy
 import json
 from pathlib import Path
 
 import frappe
+
+from alaiy_os_agent_shopify_listing import matrix
 
 _APP = "alaiy_os_agent_shopify_listing"
 _APP_DIR = Path(__file__).resolve().parent
@@ -370,6 +373,61 @@ def parse_override(text):
 	return meta, body.strip()
 
 
+def schema_for_site():
+	"""
+	BASE_SCHEMA plus whatever the installed client's field guideline adds.
+
+	One thing so far: the client's own category field, whose name and allowed
+	values are the client's, not ours (see matrix.py). A site with no matrix gets
+	the vanilla schema and no field it has no values for.
+
+	The `enum` here is a HINT, not a guard. This schema ships as the `listing`
+	parameter of the save_listing tool — a Gemini function declaration, whose
+	OpenAPI subset does not reliably enforce `enum` — so `save_listing` clamps
+	whatever actually arrives rather than trusting this.
+	"""
+	profiles = matrix.profiles()
+	if not profiles:
+		return BASE_SCHEMA
+
+	field = matrix.category_field()
+	schema = copy.deepcopy(BASE_SCHEMA)
+	schema["properties"][field] = {
+		"type": "string",
+		"enum": list(profiles),
+		"description": (
+			f"The {matrix.category_label()} this product belongs to — exactly one of "
+			f"{', '.join(profiles)}, copied verbatim. It decides which attributes are "
+			"mandatory, so settle it before filling anything else. This is NOT "
+			"`category`: that one is the Shopify taxonomy path."
+		),
+	}
+	schema["required"] = list(schema["required"]) + [field]
+	return schema
+
+
+def _check_matrix_owner(override_app):
+	"""
+	The prompt and the field guideline are one statement, so one app owns both.
+
+	A prompt naming categories the matrix does not know — or a matrix enforcing
+	attributes the prompt never asked for — is a rule the agent was told and
+	nothing enforces, or the reverse. Checked here because this runs on every
+	migrate, so the mismatch fails the deploy rather than a run.
+	"""
+	providers = frappe.get_hooks(matrix.HOOK) or []
+	if not providers or not override_app:
+		return
+
+	owner = providers[0].split(".")[0]
+	if owner != override_app:
+		frappe.throw(
+			f"{matrix.HOOK} comes from '{owner}' but the prompt override comes from "
+			f"'{override_app}'. One app has to own both, or this agent is told one "
+			"field guideline and made to enforce another."
+		)
+
+
 def build_agent_meta():
 	"""
 	The registration manifest setup/install.py upserts into alaiy_os's OS Agent
@@ -383,11 +441,13 @@ def build_agent_meta():
 	billing service, and a BYOK bench uses its own site_config keys.
 	"""
 	app, path = find_override()
+	_check_matrix_owner(app)
 	meta, body = parse_override(path.read_text(encoding="utf-8")) if path else ({}, "")
 
 	prompt = f"{BASE_PROMPT.rstrip()}\n\n{body}\n" if body else BASE_PROMPT
+	schema = schema_for_site()
 	tools = [dict(spec, tool_id=tool_id, connector=None)
-	         for tool_id, spec in tool_catalog(BASE_SCHEMA).items()]
+	         for tool_id, spec in tool_catalog(schema).items()]
 
 	return {
 		"agent_id": AGENT_ID,
@@ -402,7 +462,7 @@ def build_agent_meta():
 		"max_turns": DEFAULT_MAX_TURNS,
 		"system_prompt": prompt,
 		"output_format": "JSON",
-		"output_schema": BASE_SCHEMA,
+		"output_schema": schema,
 		"tools": tools,
 		# A consequence of the tools, not a separate declaration.
 		"input_options": [t["input_option"] for t in tools if t.get("input_option")],

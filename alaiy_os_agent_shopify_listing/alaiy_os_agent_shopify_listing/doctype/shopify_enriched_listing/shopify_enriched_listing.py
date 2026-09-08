@@ -6,6 +6,8 @@ import json
 import frappe
 from frappe.model.document import Document
 
+from alaiy_os_agent_shopify_listing.tools.handlers import ATTRIBUTE_NAMESPACE
+
 
 class ShopifyEnrichedListing(Document):
 	def on_update(self):
@@ -164,15 +166,34 @@ class ShopifyEnrichedListing(Document):
 
 		A row enriched before the table existed has only the JSON, so an empty table
 		falls back to it rather than silently publishing no metafields.
+
+		Merged into the listing's metafields, never rebuilt from them. That table is
+		the store's mirror of every metafield on the product — this store carries
+		some eighty, most of them written by other apps — and an enrichment speaks
+		for the dozen-odd attributes it was asked about. Replacing the table made
+		approving one listing drop every metafield the run happened not to mention.
+
+		A key already published keeps its existing `type`: the value is ours to
+		update, but how Shopify stores it was settled when the metafield was
+		defined, and a list metafield rewritten as text is a broken definition.
 		"""
-		listing_doc.set("metafields", [])
+		published = {
+			row.key: row
+			for row in (listing_doc.get("metafields") or [])
+			if row.namespace == ATTRIBUTE_NAMESPACE and row.key
+		}
 
 		for key, value in self._attributes():
-			if not value:
+			if not key or not value:
+				continue
+
+			row = published.get(key)
+			if row:
+				row.value = str(value)
 				continue
 
 			listing_doc.append("metafields", {
-				"namespace": "custom",
+				"namespace": ATTRIBUTE_NAMESPACE,
 				"key": key,
 				"type": "single_line_text_field",
 				"value": str(value),

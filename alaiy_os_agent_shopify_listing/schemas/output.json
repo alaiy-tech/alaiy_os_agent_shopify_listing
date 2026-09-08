@@ -12,7 +12,7 @@
   },
   "category": {
    "type": "string",
-   "description": "The product's category, for the listing's `listing_category`. Reuse a category from get_reference_values VERBATIM when one applies \u2014 it is a link to an existing Shopify Category, so a new spelling of an existing category is a broken value, and get_reference_values shows you the ones this store already uses. Only propose a different one when none of them genuinely fits, name it in the full Shopify taxonomy style, and say so in notes. Empty string if it cannot be determined."
+   "description": "The product's category, for the listing's `listing_category` -- the SHOPIFY category, i.e. a full taxonomy path, and NOT the seller's own merchandising category (if your instructions give you a separate field for that, this is not it). Reuse a category from get_reference_values VERBATIM when one applies \u2014 it is a link to an existing Shopify Category, so a new spelling of an existing category is a broken value, and get_reference_values shows you the ones this store already uses. Only propose a different one when none of them genuinely fits, name it in the full Shopify taxonomy style, and say so in notes. Empty string if it cannot be determined."
   },
   "product_type": {
    "type": "string",
@@ -38,7 +38,7 @@
    "additionalProperties": {
     "type": "string"
    },
-   "description": "Structured product attributes as name -> value, which become the listing's Shopify metafields on publish. The named properties below are the ones nearly every listing needs; your instructions may name more, and unless they say otherwise you may ALSO add any other attribute that genuinely applies, using a lower_snake_case key and a plain-text value. Reuse an existing attribute key from get_reference_values when it means the same thing. Only include an attribute you can support from the product text or the photos. Always state the unit inside the value.",
+   "description": "Structured product attributes as name -> value, which become the listing's Shopify metafields on publish. The named properties below are the ones nearly every listing needs; your instructions may name more, and unless they say otherwise you may ALSO add any other attribute that genuinely applies, using a lower_snake_case key and a plain-text value. Reuse an existing attribute key from get_reference_values when it means the same thing. Only include an attribute you can support from the product text or the photos. Always state the unit inside the value. An attribute's value is the FACT ITSELF. If the value you would write is a note about not having the fact -- \"Not provided in source data\", \"TBD\", \"unknown\", \"to be determined upon manual review\" -- then OMIT the key entirely and put its human-readable name in `needs_review` instead. Such a value is blanked on save and flagged for the reviewer anyway, so writing one only costs you the attribute.",
    "properties": {
     "material": {
      "type": "string",
@@ -82,7 +82,7 @@
        "string",
        "null"
       ],
-      "description": "The variant item code this image belongs to, copied verbatim from the image step's result entry. Null for a listing-level image — which is the value unless the image step itself set it."
+      "description": "The variant item code this image belongs to, copied verbatim from the image step's result entry. Null for a listing-level image \u2014 which is the value unless the image step itself set it."
      },
      "source_url": {
       "type": "string",
@@ -107,7 +107,7 @@
   },
   "variants": {
    "type": "array",
-   "description": "One entry per variant returned by get_product; an empty array when the product has none. This is review material for the admin — nothing in it is published automatically, and you never propose prices.",
+   "description": "One entry per variant returned by get_product; an empty array when the product has none. This is review material for the admin \u2014 nothing in it is published automatically, and you never propose prices.",
    "items": {
     "type": "object",
     "additionalProperties": false,
@@ -150,7 +150,7 @@
    "items": {
     "type": "string"
    },
-   "description": "Human-readable names of fields that could NOT be confidently filled and must be completed by the admin before publish (e.g. 'Material', 'Product Type')."
+   "description": "Human-readable names of fields that could NOT be confidently filled and must be completed by the admin before publish. Use the field's human-readable name exactly as your instructions spell it -- `Case Size`, not `case_size` -- one entry per field, with the reason in brackets if it helps (e.g. 'Papers (not stated by the supplier)')."
   },
   "confidence": {
    "type": "string",
@@ -159,7 +159,7 @@
     "medium",
     "low"
    ],
-   "description": "Overall confidence in the enrichment given the quality of the source data and photos."
+   "description": "Overall confidence in the enrichment given the quality of the source data and photos. EXACTLY one of these three words and nothing else -- no comma, no qualifier, no explanation, no sentence. Anything you want to say about why goes in `notes`."
   },
   "notes": {
    "type": "array",
