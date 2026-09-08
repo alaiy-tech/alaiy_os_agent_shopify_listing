@@ -569,6 +569,29 @@ def _flag_missing_mandatory(doc, published):
 			))
 
 
+def _drop_inapplicable_flags(doc):
+	"""
+	Remove `needs_review` lines about attributes this category does not have.
+
+	`needs_review` is a queue of work for a person, and there is no work in
+	"Weight (not applicable - omit field)" on a watch -- the guideline says a
+	watch has no weight attribute, so nobody has to go and find one. A run that
+	writes such a line has misread the guideline, which the dropped-attribute
+	report below already says once.
+	"""
+	allowed = matrix.applicable(doc.get(matrix.category_field() or ""))
+	if allowed is None:
+		return
+
+	kept = []
+	for line in (doc.needs_review or "").splitlines():
+		keys = matrix.match_keys([line])
+		if keys and all(key not in allowed for key in keys):
+			continue
+		kept.append(line)
+	doc.needs_review = "\n".join(kept)
+
+
 def _annotate_published_flags(doc, published):
 	"""
 	Mark the agent's own `needs_review` lines that the product already answers.
@@ -717,6 +740,10 @@ def save_listing(listing, item_code=None):
 
 	_apply_category_profile(doc, listing)
 
+	# After the profile is settled, since which attributes a category has none of
+	# is the whole question.
+	_drop_inapplicable_flags(doc)
+
 	# structured attributes -> pretty JSON; whole payload kept verbatim for audit
 	doc.attributes_json = frappe.as_json(listing.get("attributes") or {})
 	doc.variants_json = frappe.as_json(listing.get("variants") or [])
@@ -744,11 +771,13 @@ def save_listing(listing, item_code=None):
 			# rather than stored: a row here publishes as a metafield on
 			# approval, and `back_type: "Not applicable"` on a wristwatch is a
 			# field of noise on a live product page. The reviewer is told, since
-			# the agent filling it at all means it worked from the wrong set.
-			_flag(doc, (
-				f"{matrix.label(key)} (does not apply to {profile}; the agent "
-				"filled it anyway, so it was dropped)"
-			))
+			# the agent filling it at all means it worked from the wrong set --
+			# but only once, and not on top of the agent's own line about it.
+			if key not in spoken_for:
+				_flag(doc, (
+					f"{matrix.label(key)} (does not apply to {profile}; the agent "
+					"filled it anyway, so it was dropped)"
+				))
 			continue
 		text = _flatten(value)
 		if text is not None and not text.strip():
