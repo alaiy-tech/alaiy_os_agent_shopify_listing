@@ -502,6 +502,39 @@ def _apply_category_profile(doc, listing):
 		))
 
 
+def _legal_value(text, legal, live):
+	"""
+	`text` held to the values the guideline allows, or None when it cannot be.
+
+	Where the guideline names the values an attribute may take, those ARE the
+	attribute -- "Branded Box" is not a longer way of saying Yes, it is a
+	Jewelry answer given to a watch. So the value is resolved onto the list
+	rather than stored beside it, three ways, in order of how much each assumes:
+
+	  1. it is one of them in different clothes ("yes" -> "Yes")
+	  2. it contains exactly one of them ("Tang buckle" -> "Tang"); two would be
+	     ambiguous, and neither is then guessed at
+	  3. the product already publishes a legal one, which outranks an illegal
+	     answer from a run
+
+	None means none of those applied, and the reviewer has to supply it -- which
+	is a needs_review line, not a wrong value on a live product page.
+	"""
+	for value in legal:
+		if matrix.same_value(value, text):
+			return value
+
+	contained = [value for value in legal if matrix.contains_value(text, value)]
+	if len(contained) == 1:
+		return contained[0]
+
+	for value in legal:
+		if live and matrix.same_value(value, live):
+			return value
+
+	return None
+
+
 def _flag_missing_mandatory(doc, published):
 	"""
 	The check the prompt describes and nothing used to enforce: every mandatory
@@ -757,17 +790,21 @@ def save_listing(listing, item_code=None):
 
 		legal = matrix.allowed_values(profile, key)
 		if legal:
-			match = next((v for v in legal if matrix.same_value(v, text)), None)
-			if match:
-				text = match
-			else:
-				# Kept, not clamped: this is the only value the run produced for
-				# a mandatory field, and a reviewer with a flagged wrong answer
-				# is better off than one with a silently emptied field.
+			resolved = _legal_value(text, legal, live)
+			if resolved is None:
+				# Nothing legal to store, so nothing is stored. Left in as the
+				# agent wrote it, the value publishes to a live product page as
+				# an answer the guideline does not recognise.
 				_flag(doc, (
 					f"{matrix.label(key)} (the guideline allows only "
-					f"{' or '.join(legal)} for {profile}; the agent wrote {text!r})"
+					f"{' or '.join(legal)} for {profile}; the agent wrote "
+					f"{text!r}, so the field was left empty)"
 				))
+				continue
+			# Resolved silently when it resolves. A value corrected onto the
+			# guideline is not a change anyone needs to review -- reported, it
+			# fills the reviewer's queue with work that is already done.
+			text = resolved
 
 		doc.append("attributes", {"key": key, "value": text})
 

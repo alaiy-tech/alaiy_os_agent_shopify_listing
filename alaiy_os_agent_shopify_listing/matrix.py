@@ -218,6 +218,18 @@ def same_value(left, right):
 	return " ".join(_words(left)) == " ".join(_words(right))
 
 
+def contains_value(text, value):
+	"""
+	True when `value` appears inside `text` as a whole run of words.
+
+	"Tang buckle" contains "Tang", so a run that answered with the guideline's
+	value plus a word of its own can be held to the guideline rather than
+	discarded. Whole words, so "Deployant" is not found inside some longer word
+	that merely starts the same way.
+	"""
+	return _contiguous(_words(text), _words(value))
+
+
 def is_placeholder(value):
 	"""
 	True when a value is a note about the absence of the value.
