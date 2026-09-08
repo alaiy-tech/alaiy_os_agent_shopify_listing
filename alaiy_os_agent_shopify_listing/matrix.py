@@ -139,6 +139,50 @@ def mandatory(profile, product_type=None):
 	return frappe.get_attr(spec["mandatory"])(profile, product_type=product_type)
 
 
+def applicable(profile):
+	"""
+	The set of attribute keys this profile is allowed to carry, or None when the
+	client's guideline does not say.
+
+	None and empty mean opposite things and callers must keep them apart: None is
+	"no opinion, allow anything" -- no matrix installed, an unknown profile, or a
+	client matrix predating the `optional` column -- while a set is a closed
+	allow-list, and a key outside it is one the guideline says does not exist for
+	this category.
+	"""
+	spec = load()
+	if not spec or not profile:
+		return None
+
+	profile_spec = (spec.get("profiles") or {}).get(profile)
+	if not profile_spec:
+		return None
+	if profile_spec.get("optional") is None:
+		# A guideline written before this column existed cannot distinguish
+		# "optional" from "not applicable", and guessing would drop good values.
+		return None
+
+	keys = set(profile_spec.get("mandatory") or ())
+	keys |= {rule["key"] for rule in (profile_spec.get("conditional") or ())}
+	keys |= set(profile_spec.get("optional") or ())
+	return keys
+
+
+def allowed_values(profile, key):
+	"""
+	The values the client's guideline allows for this attribute in this category,
+	or [] when it does not restrict them.
+
+	Almost nothing is restricted -- see VALUE_RULES in the client matrix for why
+	the list is deliberately short.
+	"""
+	spec = load()
+	if not spec or not profile:
+		return []
+	per_profile = (spec.get("value_rules") or {}).get(key) or {}
+	return list(per_profile.get(profile) or ())
+
+
 # ── generic text handling (no matrix required) ────────────────────────────────
 
 # Values that name the absence of a value. Kept deliberately short: every
@@ -148,6 +192,9 @@ def mandatory(profile, product_type=None):
 _PLACEHOLDERS = (
 	"not provided", "not specified", "not available", "not known",
 	"not determinable", "not determined", "unable to determine",
+	# Never a real attribute value in any category, and the guideline's
+	# not-applicable column is what an agent means by writing it.
+	"not applicable",
 	"cannot determine", "could not determine", "unknown", "n a", "tbd",
 	"to be determined", "to be confirmed", "manual review", "needs review",
 	"see description", "none provided", "no data", "pending",
@@ -156,6 +203,19 @@ _PLACEHOLDERS = (
 
 def _words(text):
 	return re.findall(r"[a-z0-9]+", (text or "").lower())
+
+
+def same_value(left, right):
+	"""
+	True when two values say the same thing in different clothes.
+
+	Case, punctuation and separator differences only: "18K rose gold" and "18K
+	Rose Gold" are one value, and so are "Small seconds" and "Small Seconds".
+	Word order is NOT normalised, so "Leather, Black" and "Black leather" stay
+	different -- a reviewer may well prefer one -- and neither is numeric
+	punctuation, so "1.68 ct" and "168 ct" are not quietly merged.
+	"""
+	return " ".join(_words(left)) == " ".join(_words(right))
 
 
 def is_placeholder(value):

@@ -282,7 +282,35 @@ def revert_listing_image(item_code, source_url):
 	return {"item_code": item_code, "source_url": source_url, "reverted": len(filled)}
 
 
-def _ensure_enriched_listing(item_code, listing):
+@frappe.whitelist(methods=["POST"])
+def ensure_enriched_listing(item_code):
+	"""
+	The product's Shopify Enriched Listing, created as a seeded Draft if it has
+	none. Returns its name (which is the item_code).
+
+	Exists for the same reason the image step needs it: a record keyed to the
+	product is the only place a change can be staged for approval, and a product
+	nobody has enriched has none. An admin editing an attribute by hand is that
+	same case, so it goes through the same seeding -- a Draft copy of what the
+	product already says, which approval writes back over itself as a no-op
+	except for the one field that was actually edited.
+	"""
+	from alaiy_os_agent_shopify_listing.tools import handlers as base
+
+	if not frappe.db.exists(base.LISTING_DOCTYPE, item_code):
+		frappe.throw(f"No {base.LISTING_DOCTYPE} found for item_code '{item_code}'.")
+	listing = frappe.get_doc(base.LISTING_DOCTYPE, item_code)
+	# Nothing is owed on the imagery here -- no render was queued, this is a hand
+	# edit -- so the row must not claim otherwise. save_listing's own rule: every
+	# seeded photo already has its url, so "Ready", and no photos is "Not
+	# Required". Left at the image step's "Queued" it would tell the reviewer
+	# pictures were on their way that nobody asked for.
+	image_status = "Ready" if base.listing_image_urls(listing) else "Not Required"
+	_ensure_enriched_listing(item_code, listing, image_status=image_status)
+	return item_code
+
+
+def _ensure_enriched_listing(item_code, listing, image_status="Queued"):
 	"""The row stage two delivers into, seeded from the product if it has none.
 
 	image_stage.run_step gives up when there is no Shopify Enriched Listing, so a
@@ -310,7 +338,9 @@ def _ensure_enriched_listing(item_code, listing):
 	doc = frappe.new_doc(ENRICHED_DOCTYPE)
 	doc.item_code = item_code
 	doc.status = "Draft"
-	doc.image_status = "Queued"
+	# "Queued" by default because the caller this was written for is stage two of
+	# the image pipeline, which is about to add a row with no url yet.
+	doc.image_status = image_status
 
 	# The listing -> enriched field mapping save_listing documents, read backwards.
 	doc.title = listing.listing_title
@@ -322,9 +352,13 @@ def _ensure_enriched_listing(item_code, listing):
 
 	# Metafields are what the attributes table publishes back as, so they round-trip
 	# through it. A product with none simply seeds none.
-	for row in listing.get("metafields") or []:
-		if row.key:
-			doc.append("attributes", {"key": row.key, "value": row.value})
+	#
+	# Only the namespace this app publishes into. Approval merges the attributes
+	# table into the listing's metafields under that one namespace, so seeding a
+	# key another app owns (`uploadify_product.watch_papers`) would not round-trip
+	# it -- it would copy it into `custom` and leave the store with two.
+	for key, value in base.published_attributes(listing).items():
+		doc.append("attributes", {"key": key, "value": value})
 
 	# Every photo the product has, as a row that already holds it: `url` is the photo
 	# itself, since nothing better exists yet, and `kind="hero"` is what _sync_images

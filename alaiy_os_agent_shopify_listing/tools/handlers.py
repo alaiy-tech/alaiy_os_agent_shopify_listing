@@ -29,6 +29,7 @@ save_listing persists the finished enrichment into the Shopify Enriched Listing
 DocType in "Needs Review" status, for the admin to edit and approve.
 """
 
+import json
 import re
 
 import frappe
@@ -48,6 +49,19 @@ LISTING_DOCTYPE = "Shopify Product Listing"
 
 # The DocType the agent writes to, for admin review.
 ENRICHED_DOCTYPE = "Shopify Enriched Listing"
+
+# The metafield namespace an approved enrichment publishes its attributes into
+# (see ShopifyEnrichedListing._sync_attributes_as_metafields, which imports this
+# so the two cannot drift). It is also the namespace read back as "what this
+# product already says": a value here is one an approval would overwrite, which
+# is exactly the set the agent must be shown before it writes.
+ATTRIBUTE_NAMESPACE = "custom"
+
+# A metafield value is evidence for the model, not a document — the one on this
+# store that is genuinely long is a third-party app's JSON config blob, and it
+# says nothing an enrichment needs. Cut rather than dropped, since the head of a
+# long value is usually the part that matters.
+MAX_METAFIELD_CHARS = 300
 
 
 # ── listing photo access (also used by the image tools) ──────────────────────
@@ -83,6 +97,76 @@ def primary_listing_image_url(listing):
 		if row.get("image"):
 			return row.get("image")
 	return None
+
+
+# ── published metafield access ───────────────────────────────────────────────
+#
+# The listing's metafields are the store's own record of this product, mirrored
+# from Shopify. Until now nothing here read them, so the agent enriched every
+# product as if it were blank and reported gaps the store had already filled.
+
+
+# What a Shopify list metafield holds when nobody filled it in. Empty to a
+# person, truthy to any `if value:` — so it has to be spelled out, or the model
+# is told a product "has" a style whose value is the two characters "[]".
+_EMPTY_METAFIELD_VALUES = ("", "[]", "{}", "[ ]", "null")
+
+
+def metafield_text(value):
+	"""
+	One metafield's value as plain text, or None when it holds nothing.
+
+	Shopify's `list.*` metafields are stored as their JSON, so the value arrives
+	as the four characters `["Black"]`. Unwrapped to `Black`, because the model
+	copies what it is shown into an attribute, and a value carrying brackets and
+	quotes reaches a metafield and then a shopper's screen.
+	"""
+	text = _flatten(value)
+	if text is None:
+		return None
+	text = text.strip()
+	if text.startswith("[") and text.endswith("]"):
+		try:
+			text = _flatten(json.loads(text)).strip()
+		except (json.JSONDecodeError, ValueError, AttributeError):
+			pass
+	if text in _EMPTY_METAFIELD_VALUES:
+		return None
+	if len(text) > MAX_METAFIELD_CHARS:
+		text = text[:MAX_METAFIELD_CHARS] + "…"
+	return text
+
+
+def listing_metafields(listing):
+	"""
+	`{namespace: {key: value}}` for the listing, blanks dropped.
+
+	Grouped by namespace rather than flattened, because a key is only unique
+	within one: this store carries both `custom.style` ("Dress/Formal") and
+	`uploadify_product.style` ("[]"), and a flat dict makes which one you get an
+	accident of row order.
+	"""
+	grouped = {}
+	for row in (listing.get("metafields") or []):
+		key = row.get("key")
+		text = metafield_text(row.get("value"))
+		if not key or text is None:
+			continue
+		grouped.setdefault(row.get("namespace") or "", {})[key] = text
+	return grouped
+
+
+def published_attributes(listing):
+	"""
+	`{key: value}` this product already publishes as attributes.
+
+	These are the values a reviewer sees in the grid and the ones an approval
+	overwrites, so they are what "already answered" means everywhere below: the
+	model is shown them so it verifies instead of re-deriving, and the
+	mandatory-attribute check counts them as filled instead of sending the
+	reviewer after a value the product has carried all along.
+	"""
+	return listing_metafields(listing).get(ATTRIBUTE_NAMESPACE, {})
 
 
 def get_listing(item_code):
@@ -151,6 +235,15 @@ def get_product(item_code):
 	text block of the structured data followed by one labelled image block per
 	photo. Reads strictly from the listing — never the underlying Item.
 
+	`published_attributes` and `other_metafields` are what the store already
+	records about this product. They are here because without them the model
+	enriches every product as if it were blank: it re-derives values the store
+	already holds, and writes "Not provided in source data" for attributes that
+	are published on the live product — which then reaches the reviewer as a
+	chore that was already done. `published_attributes` is the namespace an
+	approval overwrites, so it is both the model's evidence and the thing its
+	output replaces; `other_metafields` is everything else, evidence only.
+
 	Both `image_urls` (all photos, in order) and `primary_image_url` (the best
 	one to use as an edit base) are returned, so an image tool has whichever it
 	needs without a second read.
@@ -165,6 +258,12 @@ def get_product(item_code):
 		"shopify_status": listing.get("sh_shopify_status"),
 		"is_enabled": bool(listing.get("is_enabled")),
 		"shopify_product_id": listing.get("sh_shopify_product_id"),
+		"published_attributes": published_attributes(listing),
+		"other_metafields": {
+			namespace: values
+			for namespace, values in listing_metafields(listing).items()
+			if namespace != ATTRIBUTE_NAMESPACE
+		},
 		"image_urls": listing_image_urls(listing),
 		"primary_image_url": primary_listing_image_url(listing),
 		"variants": [
@@ -403,10 +502,17 @@ def _apply_category_profile(doc, listing):
 		))
 
 
-def _flag_missing_mandatory(doc):
+def _flag_missing_mandatory(doc, published):
 	"""
 	The check the prompt describes and nothing used to enforce: every mandatory
-	attribute is either filled or named in `needs_review`.
+	attribute is either filled by this run, already published on the product, or
+	named in `needs_review`.
+
+	`published` counts as filled because the check asks whether the product will
+	have the attribute, not whether this particular run produced it. Reading it
+	as "this run must fill it" is what put Brand Packaging, Papers, Clasp Type
+	and Complications in one watch's review queue while the live product carried
+	a value for all four.
 
 	Deliberately appends instead of refusing. Refusing means the model rebuilds
 	the payload, and rebuilding the payload is precisely what lost six good
@@ -419,6 +525,7 @@ def _flag_missing_mandatory(doc):
 		return
 
 	filled = {row.key for row in doc.attributes if row.key and (row.value or "").strip()}
+	filled |= set(published or {})
 	flagged = set(matrix.match_keys((doc.needs_review or "").splitlines()))
 
 	for key, label in required:
@@ -427,6 +534,38 @@ def _flag_missing_mandatory(doc):
 				f"{label} (mandatory for {profile}; the agent put it in neither "
 				"attributes nor needs_review)"
 			))
+
+
+def _annotate_published_flags(doc, published):
+	"""
+	Mark the agent's own `needs_review` lines that the product already answers.
+
+	The agent flags what it could not see, and it cannot see a metafield it was
+	never shown -- so before `get_product` carried them, a flag like "Papers"
+	arrived on a product publishing `papers: Yes`. Feeding the model those values
+	is the real fix; this covers the run that flags one anyway.
+
+	Annotated, not dropped. The agent had a reason to flag it, and "the agent
+	could not confirm the papers, and the product claims Yes" is a discrepancy
+	worth a reviewer's glance -- just not an empty field to go and fill.
+	"""
+	lines = (doc.needs_review or "").splitlines()
+	if not lines or not published:
+		return
+
+	annotated = []
+	for line in lines:
+		answered = [key for key in matrix.match_keys([line]) if key in published]
+		if len(answered) == 1:
+			# The line is usually just the label, so naming the attribute again
+			# would read "Papers — ... publishes Papers: Yes".
+			line = f"{line} — already published as {published[answered[0]]}"
+		elif answered:
+			values = "; ".join(f"{matrix.label(key)}: {published[key]}" for key in answered)
+			line = f"{line} — already published: {values}"
+		annotated.append(line)
+
+	doc.needs_review = "\n".join(annotated)
 
 
 def save_listing(listing, item_code=None):
@@ -475,7 +614,9 @@ def save_listing(listing, item_code=None):
 	told (see _select_value, _clamp_data); a value that is really a note about
 	not having the value is blanked and flagged (matrix.is_placeholder); and any
 	mandatory attribute left out of both `attributes` and `needs_review` is
-	appended to `needs_review` (_flag_missing_mandatory). All of it exists
+	appended to `needs_review` (_flag_missing_mandatory). An attribute the
+	product already publishes is none of those things — it is filled, and saying
+	otherwise sends the reviewer after a value that is already live. All of it exists
 	because the alternative — refusing the call — makes the model rebuild the
 	payload, and a rebuilt payload silently drops attributes it had already got
 	right. `output_json` keeps the agent's own words regardless, so a clamp
@@ -498,6 +639,11 @@ def save_listing(listing, item_code=None):
 		frappe.throw(
 			f"No {LISTING_DOCTYPE} found for item_code '{item_code}'; cannot save the listing."
 		)
+
+	# What the product already publishes. Read once and used three times below —
+	# an attribute the store answers is not a placeholder to report, not a gap to
+	# flag, and not a chore for the reviewer.
+	published = published_attributes(get_listing(item_code))
 
 	if frappe.db.exists(ENRICHED_DOCTYPE, item_code):
 		doc = frappe.get_doc(ENRICHED_DOCTYPE, item_code)
@@ -526,6 +672,8 @@ def save_listing(listing, item_code=None):
 	doc.notes = "\n".join(_flatten(t) or "" for t in (listing.get("notes") or []))
 	doc.shopify_tags = "\n".join(_flatten(t) or "" for t in (listing.get("shopify_tags") or []))
 
+	_annotate_published_flags(doc, published)
+
 	if overlong:
 		_flag(doc, f"Title (the agent wrote {overlong} characters; it was cut to fit)")
 	if bad_confidence:
@@ -550,8 +698,24 @@ def save_listing(listing, item_code=None):
 	# What the agent already told the reviewer about, so a placeholder for a field
 	# it also listed in needs_review does not report the same field twice.
 	spoken_for = set(matrix.match_keys((doc.needs_review or "").splitlines()))
+	# The keys this category is allowed to carry at all, or None when the
+	# client's guideline has no opinion.
+	profile = doc.get(matrix.category_field() or "")
+	allowed = matrix.applicable(profile)
 	for key, value in (listing.get("attributes") or {}).items():
 		if not key:
+			continue
+		if allowed is not None and key not in allowed:
+			# The guideline says this attribute does not exist for this
+			# category -- a watch has no earring back. Kept out of the table
+			# rather than stored: a row here publishes as a metafield on
+			# approval, and `back_type: "Not applicable"` on a wristwatch is a
+			# field of noise on a live product page. The reviewer is told, since
+			# the agent filling it at all means it worked from the wrong set.
+			_flag(doc, (
+				f"{matrix.label(key)} (does not apply to {profile}; the agent "
+				"filled it anyway, so it was dropped)"
+			))
 			continue
 		text = _flatten(value)
 		if text is not None and not text.strip():
@@ -568,7 +732,10 @@ def save_listing(listing, item_code=None):
 			# to the live storefront as a metafield when the listing is approved.
 			# The row stays so the reviewer sees an empty cell to fill, and
 			# attributes_json/output_json keep the agent's words verbatim.
-			if key not in spoken_for:
+			# Not when the product publishes the value: the agent wrote a note
+			# about not knowing something the store does know, which is a gap in
+			# what it was shown, not a gap in the product.
+			if key not in spoken_for and key not in published:
 				_flag(doc, f"{matrix.label(key)} (the agent gave a placeholder, not a value)")
 			text = None
 		if text is None:
@@ -577,6 +744,31 @@ def save_listing(listing, item_code=None):
 			# row adds nothing a reviewer can act on -- and the completeness
 			# pass below names it in needs_review if it is mandatory.
 			continue
+
+		live = published.get(key)
+		if live and text != live and matrix.same_value(text, live):
+			# The same value in different clothes -- "18K rose gold" for the
+			# store's "18K Rose Gold". Stored as the store spells it, because
+			# the difference is not one a reviewer can act on: shown as a change
+			# it demands a decision between two identical values, and approved
+			# it rewrites a live metafield to say what it already said. The
+			# store's spelling wins by being the one already published.
+			text = live
+
+		legal = matrix.allowed_values(profile, key)
+		if legal:
+			match = next((v for v in legal if matrix.same_value(v, text)), None)
+			if match:
+				text = match
+			else:
+				# Kept, not clamped: this is the only value the run produced for
+				# a mandatory field, and a reviewer with a flagged wrong answer
+				# is better off than one with a silently emptied field.
+				_flag(doc, (
+					f"{matrix.label(key)} (the guideline allows only "
+					f"{' or '.join(legal)} for {profile}; the agent wrote {text!r})"
+				))
+
 		doc.append("attributes", {"key": key, "value": text})
 
 	doc.set("variants", [])
@@ -623,7 +815,7 @@ def save_listing(listing, item_code=None):
 		doc.image_status = "Not Required"
 	doc.image_error = None
 
-	_flag_missing_mandatory(doc)
+	_flag_missing_mandatory(doc, published)
 
 	try:
 		doc.save(ignore_permissions=True)
