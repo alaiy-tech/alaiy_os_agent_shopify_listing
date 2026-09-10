@@ -377,6 +377,61 @@ def _ensure_enriched_listing(item_code, listing, image_status="Queued"):
 	doc.insert(ignore_permissions=True)
 
 
+@frappe.whitelist(methods=["POST"])
+def publish_listing_images(item_code):
+	"""Commit this product's retouched photos to its live listing.
+
+	    POST {"item_code": "SH-123"} -> {item_code, published, images}
+
+	The imagery half of an approval, on its own. Retouched photos land on the
+	Shopify Enriched Listing and reach the product only when something applies
+	them, and until now the only thing that did was approving the whole
+	enrichment. That left a photo-only retouch with no way out at all: it is
+	written as a Draft (retouching a photo is not a listing anyone asked a human
+	to read), and the admin's Save only approves a draft that is Needs Review —
+	so the photo sat marked "pending approval" with nothing able to approve it.
+
+	This publishes the imagery and NOTHING else. No title, no description, no
+	attributes, and `is_enriched` is left alone: cleaning up a background does
+	not make a listing's copy reviewed, and a product should not have to accept
+	text it never asked for to get its photos.
+
+	It shares ShopifyEnrichedListing.apply_images with approval rather than
+	reimplementing the mapping, so the two routes cannot disagree about what a
+	row means. Approving afterwards stays safe — it applies the same rows again,
+	over themselves.
+
+	Idempotent, and refuses rather than pretends: a product with no enrichment
+	record, or one whose photos are all still rendering or failed, is told so.
+	"""
+	if not frappe.db.exists(ENRICHED_DOCTYPE, item_code):
+		frappe.throw("This product has no retouched photos to save.")
+
+	enriched = frappe.get_doc(ENRICHED_DOCTYPE, item_code)
+	enriched.check_permission("write")
+
+	produced = [row for row in (enriched.images or []) if row.url]
+	if not produced:
+		frappe.throw("None of this product's photos have finished rendering yet.")
+
+	listing = frappe.get_doc(base_listing_doctype(), item_code)
+	enriched.apply_images(listing)
+	listing.save(ignore_permissions=True)
+	frappe.db.commit()
+
+	return {
+		"item_code": item_code,
+		"published": len(produced),
+		"images": [row.url for row in produced],
+	}
+
+
+def base_listing_doctype():
+	from alaiy_os_agent_shopify_listing.tools import handlers as base
+
+	return base.LISTING_DOCTYPE
+
+
 @frappe.whitelist()
 def get_listing_images(item_code):
 	"""
