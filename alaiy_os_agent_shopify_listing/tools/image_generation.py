@@ -15,7 +15,7 @@ photo plus a rich brief, an image model re-renders an idealised lookalike rather
 than editing the real piece, and a luxury resale catalog cannot ship a photo of
 something the customer will not receive. So the briefs are gone: there is no shot
 vocabulary, nothing for the model to compose, and one fixed retouch instruction
-(_ENHANCE_PROMPT) that every photo goes through unchanged.
+(enhance_prompt) that every photo goes through unchanged.
 
 That also means the model no longer chooses what imagery exists. It calls the tool;
 the tool processes whatever photos the product has.
@@ -44,7 +44,7 @@ from alaiy_os.engine import llm
 
 from alaiy_os_agent_shopify_listing import image_stage
 from alaiy_os_agent_shopify_listing.tools import handlers as base
-from alaiy_os_agent_shopify_listing.tools import images
+from alaiy_os_agent_shopify_listing.tools import image_style, images
 
 # Every photo a product has is enhanced — the listing's own and each enabled
 # variant's. There is deliberately no per-product cap: a photo left unenhanced is a
@@ -65,17 +65,10 @@ _QUEUED_NOTE = "Being enhanced in the background; the image will appear here whe
 # explains why this one has a url when its siblings do not.
 _REUSED_NOTE = "Enhanced on an earlier run; reused rather than enhanced again."
 
-# The whole instruction, identical for every photo. It is a constant, not something
-# the model writes, because the failure this tool exists to avoid is the model
-# describing the product well enough that the image service re-renders it: the
-# photograph is the only description of the product that is allowed to matter.
-#
-# The two halves are deliberate. The first says what must not change, in the terms a
-# jewelry and watch catalog cares about — a moved stone, a straightened link or a
-# polished-out scratch turns a listing photo into a misrepresentation. The second
-# lists the retouching that IS wanted, specifically rather than as "make it better",
-# which an image model reads as licence to restyle.
-_ENHANCE_PROMPT = (
+# What must not change, in the terms a jewelry and watch catalog cares about — a
+# moved stone, a straightened link or a polished-out scratch turns a listing photo
+# into a misrepresentation. This half is the same whatever the site's house style is.
+_PRESERVE = (
 	"Retouch this product photograph. Return the SAME photograph, cleaned up — not "
 	"a new image of the product, and not a restyled or re-rendered one.\n\n"
 	"Leave the product itself untouched: the same shape and proportions, the same "
@@ -84,16 +77,80 @@ _ENHANCE_PROMPT = (
 	"engravings and hallmarks, and the same marks of age, wear and patina. Keep "
 	"the original camera angle, pose, framing, crop and aspect ratio. Do not "
 	"repair, polish out, straighten, beautify or complete any part of the piece, "
-	"and do not add reflections, props, hands, models, text or watermarks.\n\n"
+	"and do not add reflections, props, hands, models, text or watermarks."
+)
+
+# The retouching that IS wanted, listed specifically rather than as "make it
+# better", which an image model reads as licence to restyle. The material-by-
+# material half comes from the client's photography guidelines: a warm yellow gold,
+# a cool-but-not-grey white gold and a pink-but-not-lurid rose gold are the three
+# ways this catalog is most often got wrong, and "correct the white balance" alone
+# does not say which way to err.
+_IMPROVE = (
 	"Improve only the photography: even out the lighting and remove harsh glare "
 	"and blown highlights, correct the white balance and colour cast so the metal "
 	"and stones read true to the original, recover detail lost in shadow, sharpen "
-	"detail that is genuinely there, reduce noise and compression artefacts, "
-	"remove dust, lint, fingerprints and smudges, and clean up the background — "
-	"even out its tone or replace a cluttered one with a plain neutral studio "
-	"surface.\n\n"
-	"If a change would alter what the customer actually receives, do not make it."
+	"detail that is genuinely there, reduce noise and compression artefacts, and "
+	"remove dust, lint, fingerprints and smudges.\n\n"
+	"Hold each material to its own character. Yellow gold keeps its warmth and "
+	"saturation without going orange; white gold reads cool without turning grey "
+	"or blue; rose gold keeps its pink hue, neither washed out nor oversaturated. "
+	"Diamonds and colourless stones keep their fire and brilliance and stay "
+	"well-defined against their settings, without being flattened or blown out; "
+	"coloured stones stay bright and true. Pearls keep a satin lustre, not a gloss. "
+	"Let polished metal carry specular highlights that read as depth, and keep a "
+	"brushed finish visibly brushed. Deepen shadows on the piece only enough to "
+	"give it dimension. The result must look polished but believable: an "
+	"over-edited photograph is a worse result than an unedited one."
 )
+
+# Appended when the site has a house style (see tools/image_style.py). The ground,
+# the margin and the shadow are composited in code afterwards, to an exact colour
+# and an exact geometry, so what is wanted from the model here is the OPPOSITE of a
+# finished catalog shot: the piece, alone, on nothing. A model that helpfully adds
+# its own soft shadow or grey sweep does not just duplicate that work, it defeats
+# it — the compositor separates the product from the ground by flooding in from the
+# edge of the frame, and a gradient or a cast shadow is what makes that refuse to
+# run at all (and the photo comes back unfinished).
+_ISOLATE = (
+	"Place the retouched product on a completely empty, uniform, pure white "
+	"background. The background must be a single flat white with no shadow, no "
+	"reflection, no gradient, no vignette, no surface, no horizon line and no "
+	"texture of any kind, edge to edge. Do not add a drop shadow or a contact "
+	"shadow beneath the product — one is applied later. Keep the product itself "
+	"fully inside the frame and do not crop into it."
+)
+
+_CLOSING = "If a change would alter what the customer actually receives, do not make it."
+
+
+def enhance_prompt(style=None):
+	"""The whole retouch instruction, identical for every photo of every product.
+
+	It is assembled here rather than written by the model because the failure this
+	tool exists to avoid is the model describing the product well enough that the
+	image service re-renders it: the photograph is the only description of the
+	product that is allowed to matter.
+
+	`style` is the site's house style, or None. Its only effect on the prompt is to
+	ask for the product on an empty ground instead of a tidied one — everything
+	measurable about the house look (the exact background, the margin, the shadow)
+	is composited afterwards in image_style.apply_finish, because an image model
+	cannot hold an exact hex or a consistent margin across a catalog.
+
+	With no style this returns exactly the instruction this tool has always sent,
+	so a site that contributes no guidelines is unaffected by any of it.
+	"""
+	if not style:
+		return "\n\n".join([
+			_PRESERVE,
+			_IMPROVE
+			+ "\n\nAlso clean up the background — even out its tone or replace a "
+			"cluttered one with a plain neutral studio surface.",
+			_CLOSING,
+		])
+
+	return "\n\n".join([_PRESERVE, _IMPROVE, _ISOLATE, _CLOSING])
 
 
 def generate_product_images(
@@ -387,6 +444,11 @@ def render_generated(item_code, work):
 	if urls and not client.image_support().get("generate"):
 		frappe.throw("Image enhancement is not available on this site.")
 
+	# The house style, resolved here for the same reason the sources are: it reads
+	# hooks and site config, which a worker thread has no site context for. None
+	# when the site contributes no guidelines, and then nothing is composited.
+	style = image_style.load()
+
 	# Resolved on THIS thread, before the pool starts: reading a stored Frappe File
 	# or downloading an external photo needs the site context, which a worker thread
 	# does not have. The client instance itself is thread-safe by contract once
@@ -403,7 +465,7 @@ def render_generated(item_code, work):
 	results = []
 	if sources:
 		with ThreadPoolExecutor(max_workers=min(_RENDER_CONCURRENCY, len(sources))) as pool:
-			results = list(pool.map(lambda pair: _try_generate(client, pair[1]), sources))
+			results = list(pool.map(lambda pair: _try_generate(client, pair[1], style), sources))
 
 	# What this run produced, per photo. The fan-out onto each use of the photo
 	# happens below, so a shared photo is stored once here.
@@ -428,14 +490,26 @@ def render_generated(item_code, work):
 			continue
 
 		total_tokens += (payload.get("usage") or {}).get("total_tokens", 0)
-		# Saving writes a File row, so it stays on this thread too.
+		# Saving writes a File row, so it stays on this thread too. The cutout is a
+		# second file rather than a replacement: the composited image is what the
+		# listing publishes, and the transparent one is what lets the background be
+		# changed later without paying to render the photo again.
+		cutout = payload.get("cutout")
 		fresh[url] = {
 			"url": images.save_public_image(
 				"listing-enhanced",
-				base64.b64decode(payload["b64"]),
+				payload["content"],
 				payload.get("media_type") or "image/png",
 			),
-			"note": None,
+			"cutout_url": (
+				images.save_public_image("listing-cutout", cutout, "image/png")
+				if cutout
+				else None
+			),
+			# Normally None. Set when the photo came back but the house finish could
+			# not be applied to it — the photo is still good, so this is a note on a
+			# successful row, not a failure.
+			"note": payload.get("note"),
 		}
 
 	if targets is None:
@@ -467,20 +541,44 @@ def render_generated(item_code, work):
 	return {"images": out, "image_tokens": total_tokens}
 
 
-def _try_generate(client, reference_data_uri):
+def _try_generate(client, reference_data_uri, style=None):
 	"""One photo, in a worker thread. Returns (payload, error) — never raises.
+
+	    payload = {"content": bytes, "media_type": str, "usage": dict,
+	               "cutout": bytes|None, "note": str|None}
 
 	Nothing in here touches Frappe: the thread has no request context, so a
 	frappe.throw or a db read from inside it would fail in a confusing way. The
-	client was built on the calling thread and is thread-safe by contract.
+	client was built on the calling thread and is thread-safe by contract, and
+	`style` was resolved there too.
 
-	The photo goes in as the reference and _ENHANCE_PROMPT is the entire prompt, so
-	the service is always editing a real photograph rather than composing from a
-	description.
+	The photo goes in as the reference and the assembled prompt is the whole of the
+	instruction, so the service is always editing a real photograph rather than
+	composing from a description.
+
+	The house finish runs HERE rather than back on the main thread, because it is
+	pure pixel work with no site context to need and this thread is otherwise idle
+	the whole time — compositing a whole product's photos in series afterwards would
+	add that time to every job for no reason. When the site has no house style, or
+	the render did not come back in a state that can be finished, `content` is
+	simply what the service returned.
 	"""
 	try:
-		return client.generate_image(
-			_ENHANCE_PROMPT, reference_data_uri=reference_data_uri
-		), None
+		payload = client.generate_image(enhance_prompt(style), reference_data_uri=reference_data_uri)
 	except Exception as exc:
 		return None, str(exc)
+
+	content = base64.b64decode(payload["b64"])
+	media_type = payload.get("media_type") or "image/png"
+	if not style:
+		return {"content": content, "media_type": media_type, "usage": payload.get("usage")}, None
+
+	finished = image_style.apply_finish(content, style)
+	return {
+		"content": finished["image"],
+		# apply_finish reports no media type when it left the image alone.
+		"media_type": finished["mime"] or media_type,
+		"usage": payload.get("usage"),
+		"cutout": finished["cutout"],
+		"note": finished["note"],
+	}, None

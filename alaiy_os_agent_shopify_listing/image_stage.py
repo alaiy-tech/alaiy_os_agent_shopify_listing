@@ -148,8 +148,10 @@ def clear_rendered(item_code, source_url, note=_RERENDER_NOTE):
 			name,
 			# `kind` goes too: a seeded row is marked "hero" so an untouched photo
 			# publishes as the original it is, and a row about to hold a retouched
-			# photo must not keep claiming that.
-			{"url": None, "kind": None, "note": note},
+			# photo must not keep claiming that. So does `cutout_url`: it is the
+			# clipped version of the result being discarded, and leaving it behind
+			# would pair the next render with the previous one's cutout.
+			{"url": None, "cutout_url": None, "kind": None, "note": note},
 			update_modified=False,
 		)
 
@@ -279,6 +281,12 @@ def _apply_once(item_code, rendered):
 			row.brief = image.get("brief") or row.brief
 			row.url = image.get("url")
 			row.note = image.get("note")
+			# Only when the entry speaks to it. Unlike `url`, which every entry
+			# carries, a cutout is produced by one step on one kind of job — a
+			# reconcile pass or a translated image says nothing about it, and
+			# assigning unconditionally would blank a good cutout on the way past.
+			if "cutout_url" in image:
+				row.cutout_url = image.get("cutout_url")
 		if image.get("url"):
 			produced += 1
 

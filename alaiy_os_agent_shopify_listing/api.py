@@ -384,7 +384,12 @@ def get_listing_images(item_code):
 	`enrich_listing_image`.
 
 	    {item_code, image_status, image_error, image_tokens,
-	     images: [{source_url, item_variant, url, note, kind}, ...]}
+	     images: [{source_url, item_variant, url, cutout_url, note, kind}, ...]}
+
+	`cutout_url` is the retouched product clipped to a transparent background,
+	when the site's house style keeps one — the same picture as `url` without the
+	ground behind it, so a caller can put it on a different background without
+	paying to render the photo again. Null everywhere else.
 
 	**Watch the row, not the listing.** `image_status` is a property of the whole
 	listing, and photo-by-photo enrichment puts several jobs in flight at once: the
@@ -419,6 +424,7 @@ def get_listing_images(item_code):
 				"source_url": row.source_url,
 				"item_variant": row.item_variant,
 				"url": row.url,
+				"cutout_url": row.cutout_url,
 				"note": row.note,
 				"kind": row.kind,
 			}

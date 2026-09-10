@@ -11,6 +11,11 @@ dependencies = [
     # "frappe~=16.0.0" # Installed and managed by bench.
     # generate_image uses OpenRouter's Unified Image API directly via
     # requests (a Frappe dependency already) — no SDK needed.
+    # The house studio finish (tools/image_style.py) composites the retouched
+    # product onto the client's background. Frappe already pins the same major,
+    # so this is declared rather than installed — but it is a real import of
+    # ours and should not depend on Frappe happening to want it.
+    "Pillow~=12.2.0",
 ]
 
 [build-system]
