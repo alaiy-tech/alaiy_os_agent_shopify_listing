@@ -107,10 +107,18 @@ class ShopifyEnrichedListing(Document):
 		it deletes it. Without the fallback, approving a listing whose imagery failed,
 		or is still rendering, would strip the product of the very photos the
 		enrichment was supposed to improve.
+
+		A run with no image rows at all - image generation wasn't requested, so
+		the agent never touched images - is different from one whose rows failed:
+		there is nothing to fall back to per-row, so leave the listing's existing
+		images alone rather than replacing them with nothing.
 		"""
+		if not self.images:
+			return
+
 		listing_doc.set("images", [])
 
-		for idx, enriched_img in enumerate(self.images or []):
+		for idx, enriched_img in enumerate(self.images):
 			if enriched_img.item_variant:
 				continue
 			if not enriched_img.url and not enriched_img.source_url:
