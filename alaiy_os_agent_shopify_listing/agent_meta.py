@@ -134,9 +134,10 @@ def tool_catalog(output_schema):
 				"should be phrased for a search engine: brand + model or reference "
 				"number + product type, not a copy of the input. Returns {answer, "
 				"citations: [{title, url}]} — the answer comes from a model reading "
-				"the live web; treat it as a source, not as fact. Read the most "
-				"promising citation with `view_competitor_page` before trusting a "
-				"specific value."
+				"the live web; treat it as a source, not as fact. One citation is one "
+				"shop's word for it: read more than one of them with "
+				"`view_competitor_page` before trusting a specific value, per your "
+				"instructions below."
 			),
 			"handler": f"{_WEBSEARCH}.search_competitor_listings",
 			"parameters_schema": {
