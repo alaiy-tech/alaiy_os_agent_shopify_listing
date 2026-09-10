@@ -131,6 +131,16 @@ def reference_source(url):
 	return fetch_image_block(url)["source"]
 
 
+def data_uri(source):
+	"""A resolved `reference_source` as a data: URI, the form most image APIs want.
+
+	Split out from `reference_data_uri` so a caller that already holds the source —
+	because it also wants the raw bytes, as the compositing-only path does — does
+	not have to read or download the photo a second time to get both.
+	"""
+	return f"data:{source['media_type']};base64,{source['data']}"
+
+
 def reference_data_uri(url):
 	"""`reference_source` as a data: URI, the form most image APIs want."""
 	source = reference_source(url)

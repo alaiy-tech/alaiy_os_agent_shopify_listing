@@ -16,6 +16,13 @@ dependencies = [
     # so this is declared rather than installed — but it is a real import of
     # ours and should not depend on Frappe happening to want it.
     "Pillow~=12.2.0",
+    # Separating the product from its background (tools/image_style.py, the
+    # "segment" matte). rembg is the wrapper; onnxruntime actually runs the
+    # model, and is named explicitly because it is the heavy half and the one
+    # with the wheel constraints. The ~180MB model file itself is NOT vendored:
+    # rembg downloads it to ~/.rembg on first use — see the README.
+    "rembg~=2.0.84",
+    "onnxruntime~=1.29",
 ]
 
 [build-system]

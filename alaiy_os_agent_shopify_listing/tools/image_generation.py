@@ -296,7 +296,13 @@ def generate_product_images(
 	# discover a misconfigured site minutes later in the background. Only the
 	# capability is checked, not a credential — the credential lives off-bench now,
 	# behind the seam, so this app has nothing to inspect.
-	if not llm.image_client().image_support().get("generate"):
+	#
+	# Skipped entirely when the site's house style has retouching off: that path
+	# never calls the image service, and refusing the work because a service it
+	# will not use is unavailable would take enhancement down on exactly the sites
+	# that need nothing from it.
+	style = image_style.load()
+	if retouch_wanted(style) and not llm.image_client().image_support().get("generate"):
 		frappe.throw(
 			"Image enhancement is not available on this site (the active AI client "
 			"cannot generate images). Do NOT retry; return each image with url=null "
@@ -437,17 +443,18 @@ def render_generated(item_code, work):
 	urls = work.get("urls") or []
 	targets = work.get("targets")
 
-	# Only a job with something left to render needs the service. A job queued
-	# purely to write an earlier run's results back onto the listing must not fail
-	# because the capability has since gone away.
-	client = llm.image_client() if urls else None
-	if urls and not client.image_support().get("generate"):
-		frappe.throw("Image enhancement is not available on this site.")
-
 	# The house style, resolved here for the same reason the sources are: it reads
 	# hooks and site config, which a worker thread has no site context for. None
 	# when the site contributes no guidelines, and then nothing is composited.
 	style = image_style.load()
+	retouch = retouch_wanted(style)
+
+	# Only a job that is actually going to generate needs the service — a job that
+	# is only compositing does not, and neither does one queued purely to write an
+	# earlier run's results back onto the listing.
+	client = llm.image_client() if (urls and retouch) else None
+	if client and not client.image_support().get("generate"):
+		frappe.throw("Image enhancement is not available on this site.")
 
 	# Resolved on THIS thread, before the pool starts: reading a stored Frappe File
 	# or downloading an external photo needs the site context, which a worker thread
@@ -457,15 +464,23 @@ def render_generated(item_code, work):
 	failed_to_read = {}
 	for url in urls:
 		try:
-			sources.append((url, images.reference_data_uri(url)))
+			sources.append((url, images.reference_source(url)))
 		except Exception as exc:
 			# A photo we cannot even read is this photo's failure, not the product's.
 			failed_to_read[url] = f"Could not read the source photo: {exc}"[:200]
 
+	def work_on(pair):
+		source = pair[1]
+		if retouch:
+			return _try_generate(client, images.data_uri(source), style)
+		# No generative step at all: the photograph's own pixels are what get
+		# composited, so nothing can alter the product.
+		return _try_finish(base64.b64decode(source["data"]), source["media_type"], style)
+
 	results = []
 	if sources:
 		with ThreadPoolExecutor(max_workers=min(_RENDER_CONCURRENCY, len(sources))) as pool:
-			results = list(pool.map(lambda pair: _try_generate(client, pair[1], style), sources))
+			results = list(pool.map(work_on, sources))
 
 	# What this run produced, per photo. The fan-out onto each use of the photo
 	# happens below, so a shared photo is stored once here.
@@ -539,6 +554,40 @@ def render_generated(item_code, work):
 		})
 
 	return {"images": out, "image_tokens": total_tokens}
+
+
+def retouch_wanted(style):
+	"""Whether a photo goes through a generative retouch before it is composited.
+
+	True with no house style at all, because that is this tool's original job and
+	the only thing it did. A style may turn it off, and The Solist's does: with it
+	off nothing regenerates the product, so the only thing that changes about a
+	photograph is what is behind it.
+	"""
+	return True if not style else bool(style.get("retouch"))
+
+
+def _try_finish(content, media_type, style):
+	"""One photo, composited onto the house ground and nothing else.
+
+	The counterpart to _try_generate for a site whose style has retouching off.
+	Same (payload, error) contract, so the caller does not care which ran — but no
+	image service is involved, nothing is charged, and the product's pixels reach
+	the canvas exactly as the photographer took them.
+	"""
+	try:
+		finished = image_style.apply_finish(content, style)
+	except Exception as exc:
+		return None, str(exc)
+
+	return {
+		"content": finished["image"],
+		"media_type": finished["mime"] or media_type,
+		# No generative call, so nothing to bill.
+		"usage": None,
+		"cutout": finished["cutout"],
+		"note": finished["note"],
+	}, None
 
 
 def _try_generate(client, reference_data_uri, style=None):

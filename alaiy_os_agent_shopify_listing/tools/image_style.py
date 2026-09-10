@@ -21,17 +21,28 @@ Two things live in this module:
     that hardcodes one customer's brand guidelines is a base app no one else can
     install. No provider means no finish, which is this app's behaviour to date.
 
-  * `apply_finish()` — the compositor. Pure Pillow, and deliberately free of Frappe
-    so it can run in the same worker thread as the render it follows.
+  * `apply_finish()` — the compositor. Free of Frappe, so it can run on a worker
+    thread; pure Pillow apart from the matte.
 
-The compositor refuses rather than guesses. Everything it does depends on the model
-having returned a clean, empty ground; when it did not, a cutout would eat into the
-piece or leave a halo around it, and a mangled photo of a $40k watch is worse than
-an unfinished one. Every check below ends in the original image coming back with a
-note a reviewer can read, never in an approximation.
+How the product is separated from its background is the one real choice in here,
+and there are two ways:
+
+  * `segment` — a segmentation model (rembg / ISNet) computes an alpha mask. It
+    reads the photo and outputs an opacity per pixel; it does not draw anything.
+    The product's own pixels are carried through untouched, which is the whole
+    reason this is the default: the background is altered and the product is not,
+    by construction rather than by asking a generative model nicely.
+  * `flood` — fill inward from the frame edge over near-white pixels. No model, no
+    dependency, and no cost, but it only works on a photo that is ALREADY on a
+    clean, even, pale ground. Kept for exactly that case.
+
+Either way the compositor refuses rather than guesses: if what comes back is not a
+believable separation, the original image is returned with a note a reviewer can
+read. A mangled photo of a $40k watch is worse than an unfinished one.
 """
 
 import io
+import threading
 
 import frappe
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageStat
@@ -48,6 +59,20 @@ CONF_KEY = "listing_image_style"
 DEFAULTS = {
 	# The ground every product is composited onto.
 	"background": None,
+	# How the product is separated from its background: "segment" (a model
+	# computes an alpha mask and the product's pixels are untouched) or "flood"
+	# (fill in from the frame edge; needs an already-clean pale background).
+	"matte": "segment",
+	# Which segmentation model, when matte is "segment". ISNet over rembg's u2net
+	# default on the strength of the catalog it will actually see: u2net erases a
+	# bag's chain strap and a watch bracelet almost entirely, which for a jewelry
+	# and accessories catalog is the common case, not the corner case. ISNet keeps
+	# them link for link at roughly twice the (still sub-two-second) cost.
+	"segment_model": "isnet-general-use",
+	# Whether the photo is sent through a generative retouch BEFORE it is
+	# composited. Off means nothing regenerates the product: the original
+	# photograph's pixels are what get composited, and only the ground changes.
+	"retouch": False,
 	# Minimum clear margin on each side, as a fraction of the canvas. A MINIMUM, not
 	# a target — see `apply_finish` on why the product is never scaled up to meet it.
 	"padding": 0.06,
@@ -70,6 +95,10 @@ DEFAULTS = {
 }
 
 _UNSET = object()
+
+# Built lazily by _session and then reused for the life of the worker.
+_SESSIONS = {}
+_SESSION_LOCK = threading.Lock()
 
 # ── what "the model did as it was told" means, in numbers ────────────────────
 
@@ -103,6 +132,15 @@ _FILL_COLOR = (255, 0, 255)
 # the same distance as a cuff is supposed to occupy very little of it.
 _MIN_SUBJECT = 0.001
 _MAX_SUBJECT = 0.98
+
+# How much variation the selected region must contain to be a product at all —
+# see _featureless. Very low: this separates "a patch of flat background" from any
+# real photograph of an object, and is not a judgement about the object.
+# Calibrated against the catalog rather than guessed: over a sample of real
+# product photos the flattest subject measured 10.5 and most sit between 20 and
+# 60, while a hallucinated blob on a blank frame is 0. This sits ~7x under the
+# worst real photo and well clear of the failure it is for.
+_MIN_SUBJECT_DETAIL = 1.5
 
 # Softens the one-pixel staircase the flood leaves behind. Deliberately under a
 # pixel: any more and a bright metal edge starts to glow against the grey.
@@ -193,16 +231,22 @@ def _finish(content, spec):
 	image.load()
 	image = image.convert("RGB")
 
-	uneven = _ground_complaint(image)
-	if uneven:
-		return _skipped(content, uneven)
+	if (spec.get("matte") or DEFAULTS["matte"]) == "segment":
+		alpha = _segment_alpha(image, spec.get("segment_model") or DEFAULTS["segment_model"])
+	else:
+		# The flood needs the ground to already be clean; the model does not.
+		uneven = _ground_complaint(image)
+		if uneven:
+			return _skipped(content, uneven)
+		alpha = _subject_alpha(image)
 
-	alpha = _subject_alpha(image)
 	subject = _coverage(alpha)
 	if subject < _MIN_SUBJECT:
 		return _skipped(content, "almost nothing was left after separating the product")
 	if subject > _MAX_SUBJECT:
 		return _skipped(content, "no background could be separated from the product")
+	if _featureless(image, alpha):
+		return _skipped(content, "no product could be made out in the photo")
 
 	box = alpha.getbbox()
 	if not box:
@@ -218,6 +262,43 @@ def _finish(content, spec):
 		"cutout": _encode(cutout) if spec.get("keep_cutout") else None,
 		"note": None,
 	}
+
+
+def _segment_alpha(image, model):
+	"""An opacity mask for the product, from a segmentation model.
+
+	The model is only ever asked for the MASK — `only_mask=True`. It never gets to
+	compose or repaint anything, so whatever it decides about the edges, the pixels
+	that survive are the photograph's own. That is the property that makes this the
+	default: the background changes and the product cannot.
+
+	Alpha matting is deliberately off. rembg can refine the edge with it, at rather
+	more than double the time, and on this catalog's photography it made no visible
+	difference to the thing it would be for — a chain strap against white.
+	"""
+	from rembg import remove
+
+	return remove(image, session=_session(model), only_mask=True, post_process_mask=True)
+
+
+def _session(model):
+	"""One rembg session per model, built once and shared.
+
+	Building a session loads a ~180MB ONNX graph, which is far too expensive to do
+	per photo, and the pool renders several photos at once. onnxruntime releases
+	the GIL and its `Run` is safe to call from several threads, so the session is
+	shared rather than made thread-local; only the building is serialised, so two
+	threads arriving together cannot both pay for it.
+
+	The model file itself is downloaded to ~/.rembg on first use. On a fresh bench
+	that makes the very first photo slow rather than broken — see the README.
+	"""
+	with _SESSION_LOCK:
+		if model not in _SESSIONS:
+			from rembg import new_session
+
+			_SESSIONS[model] = new_session(model)
+		return _SESSIONS[model]
 
 
 def _ground_complaint(image):
@@ -267,6 +348,26 @@ def _subject_alpha(image):
 	moved = ImageChops.difference(flooded, image).convert("L")
 	alpha = moved.point(lambda v: 0 if v > _FILL_DELTA else 255)
 	return alpha.filter(ImageFilter.GaussianBlur(_EDGE_FEATHER))
+
+
+def _featureless(image, alpha):
+	"""True when what was selected has no detail in it, and so is not a product.
+
+	Handed a blank or near-blank frame, a segmentation model does not answer "there
+	is nothing here" — it invents a subject, and reliably the same one: on a plain
+	white frame ISNet returns a confident blob over about 6% of the image, in the
+	same place every time. Coverage bounds cannot catch that, because 6% is a
+	perfectly ordinary size for a stud earring.
+
+	What separates the two is texture. A real piece has structure inside its
+	outline — an edge, a highlight, a change of tone somewhere. A hallucinated blob
+	is a patch of the flat background it was cut from, and its standard deviation
+	is essentially zero. So the selection is measured, not its size.
+	"""
+	mask = alpha.point(lambda v: 255 if v > 128 else 0)
+	if not mask.getbbox():
+		return True
+	return max(ImageStat.Stat(image, mask).stddev) < _MIN_SUBJECT_DETAIL
 
 
 def _coverage(alpha):
