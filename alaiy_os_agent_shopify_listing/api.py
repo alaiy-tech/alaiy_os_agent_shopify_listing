@@ -384,7 +384,14 @@ def get_listing_images(item_code):
 	`enrich_listing_image`.
 
 	    {item_code, image_status, image_error, image_tokens,
-	     images: [{source_url, item_variant, url, cutout_url, note, kind}, ...]}
+	     images: [{source_url, item_variant, url, cutout_url, note, kind,
+	               pending}, ...]}
+
+	`pending` is the one to watch per photo: true while that photo is still
+	being rendered. A row that is mid-render and a row whose render failed both
+	have no url and both carry a note, so a caller cannot tell them apart from
+	`note` alone — and reading the in-flight note as a failure means giving up
+	on a photo seconds before it lands.
 
 	`cutout_url` is the retouched product clipped to a transparent background,
 	when the site's house style keeps one — the same picture as `url` without the
@@ -402,6 +409,10 @@ def get_listing_images(item_code):
 	enriched, rather than throwing — "nothing here yet" is a normal answer for a UI
 	asking about a product before anyone has enriched it.
 	"""
+	# Imported here, like everywhere else in this module: image_stage reaches
+	# back into bulk, which this module imports at the top.
+	from alaiy_os_agent_shopify_listing import image_stage
+
 	if not frappe.db.exists(ENRICHED_DOCTYPE, item_code):
 		return {
 			"item_code": item_code,
@@ -427,6 +438,10 @@ def get_listing_images(item_code):
 				"cutout_url": row.cutout_url,
 				"note": row.note,
 				"kind": row.kind,
+				# Whether this photo is still coming. Without it a caller has to
+				# infer that from `note`, and the in-flight note reads exactly
+				# like a failure note — see image_stage.is_pending.
+				"pending": image_stage.is_pending(row.url, row.note),
 			}
 			for row in (doc.images or [])
 		],

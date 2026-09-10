@@ -59,7 +59,10 @@ _RENDER_CONCURRENCY = 4
 
 # What stage one puts on an image row that stage two has not produced yet. It is
 # read by a human on the Desk form, so it says what is happening, not "queued".
-_QUEUED_NOTE = "Being enhanced in the background; the image will appear here when ready."
+# Shared with the note stage two writes when it clears a row to re-render it:
+# the two mean the same thing to a reader and to image_stage.is_pending, and a
+# second copy of the sentence would be a way for them to drift apart.
+_QUEUED_NOTE = image_stage.PENDING_NOTE
 
 # What goes on a photo an earlier run already enhanced. Also read by a human, so it
 # explains why this one has a url when its siblings do not.
