@@ -146,6 +146,52 @@ _MIN_SUBJECT_DETAIL = 1.5
 # pixel: any more and a bright metal edge starts to glow against the grey.
 _EDGE_FEATHER = 0.7
 
+# ── repairing what a segmentation mask reliably gets wrong ───────────────────
+
+# How close a hole's colour must be to the product around it — plain RGB distance
+# between the two means, 0..441 — for the hole to be read as a defect in the mask
+# rather than somewhere you can genuinely see through the piece.
+#
+# Not a guess. Measured over the catalog's own photos: the mask's own bite marks
+# out of a rubber watch strap sit at 0.6, 1.4 and 17 (they are the strap, so of
+# course they match it), while every real gap measured far off — 44 through the
+# handle of a chain-strap bag onto the wood behind it, 56 and 65 through the same
+# bag's chain, 73 onto grass, 111 and 134 onto denim, 155 and 175 between the
+# fingers of a hand holding a watch. So the whole catalog separates into a band
+# under 20 and a band over 40, and this sits in the empty middle.
+#
+# Getting this wrong in the generous direction is the expensive one: a threshold
+# high enough to catch 44 fills the gap inside a bag's chain handle with the wood
+# it was photographed on, and re-pastes a slab of the old background into the
+# middle of the finished image. Under-filling leaves a mask defect; over-filling
+# invents a solid bag.
+_HOLE_MATCH = 25.0
+
+# How far out from a hole to look for "the product around it", in pixels. A few,
+# so the comparison is against the material the hole was punched out of rather
+# than against the average of the whole piece.
+_HOLE_RING = 4
+
+# Holes smaller than this are left alone whatever their colour. At a handful of
+# pixels the mean colour is noise, and a hole that small is invisible anyway.
+_HOLE_MIN_PIXELS = 20
+
+# How far the matte is pulled in before compositing, in mask pixels — that is, in
+# pixels of the 1024-square the segmentation model actually works at, scaled up to
+# whatever the photo's real size is.
+#
+# That scaling is the point. The fringe this removes is created by the upscale: a
+# mask computed at 1024 and stretched over a 3000px photo lands its edge a few
+# real pixels wide, and those pixels are a blend of product and background. Left
+# in, a watch shot on an orange backdrop keeps a thin orange outline once it is on
+# grey. Expressed in mask pixels the correction is the same physical width on a
+# 1080px photo and a 4500px one.
+#
+# Kept small on purpose: a couple of mask pixels is enough for the blend, and much
+# more starts eating real edges — the thin gold chain of a bag is only a few mask
+# pixels wide to begin with.
+_EDGE_PULL = 1.5
+
 
 # ── the spec ─────────────────────────────────────────────────────────────────
 
@@ -233,6 +279,7 @@ def _finish(content, spec):
 
 	if (spec.get("matte") or DEFAULTS["matte"]) == "segment":
 		alpha = _segment_alpha(image, spec.get("segment_model") or DEFAULTS["segment_model"])
+		alpha = _repair(image, alpha)
 	else:
 		# The flood needs the ground to already be clean; the model does not.
 		uneven = _ground_complaint(image)
@@ -299,6 +346,123 @@ def _session(model):
 
 			_SESSIONS[model] = new_session(model)
 		return _SESSIONS[model]
+
+
+def _repair(image, alpha):
+	"""The two things a segmentation mask reliably gets wrong, undone.
+
+	Both are failures of the SAME kind and neither is a judgement about the piece:
+	the model works on a 1024-square thumbnail of the photo, and the mask that comes
+	back is stretched over the real thing. What that costs is holes it punched
+	through the product and a rim of background colour left clinging to the edge —
+	see `_fill_defect_holes` and `_pull_in_edge`.
+
+	Only the mask is touched. Not one product pixel is read for anything except
+	deciding which side of the cut it falls on, which keeps the guarantee the
+	`segment` matte exists for: the background changes and the product does not.
+
+	This is applied to the segmentation matte only. The flood matte cannot punch a
+	hole in a product — it reaches background connected to the frame edge and
+	nothing else — and it has its own feather already.
+	"""
+	return _pull_in_edge(_fill_defect_holes(image, alpha))
+
+
+def _fill_defect_holes(image, alpha):
+	"""Holes the mask punched through the product itself, made opaque again.
+
+	A segmentation mask working from a thumbnail drops patches out of the middle of
+	large, evenly-toned areas — the ribbed black rubber of a watch strap is the case
+	this catalog hits, and it arrives on the finished image as bites of background
+	grey taken out of the strap.
+
+	The fix cannot be "fill every enclosed hole", which is the obvious
+	implementation and does real damage: the gap inside the chain handle of a
+	shoulder bag is an enclosed hole too, and filling it pastes a slab of the wood
+	the bag was photographed on into the middle of an otherwise finished image.
+
+	What separates them is colour. A hole punched through the strap IS the strap —
+	its pixels and the strap's around it are the same black rubber. A gap you can
+	genuinely see through shows whatever was behind the piece, which is the thing
+	being removed and therefore looks nothing like it. So every hole is compared
+	against the product immediately around it, and only the ones that match are
+	filled. `_HOLE_MATCH` carries the measurements.
+	"""
+	import numpy as np
+	from scipy import ndimage
+
+	opaque = np.asarray(alpha) > 128
+	enclosed = ndimage.binary_fill_holes(opaque) & ~opaque
+	if not enclosed.any():
+		return alpha
+
+	holes, count = ndimage.label(enclosed)
+	if not count:
+		return alpha
+
+	pixels = np.asarray(image, dtype=np.float32)
+	repaired = np.array(alpha)
+	filled = False
+
+	# Each hole is measured inside its own bounding box rather than across the whole
+	# frame: there are only ever a handful of them, and on a 3000x4500 photograph a
+	# full-frame dilation per hole costs more than the entire matte did.
+	for label, box in enumerate(ndimage.find_objects(holes), start=1):
+		if box is None:
+			continue
+		near = tuple(
+			slice(max(0, axis.start - _HOLE_RING), min(size, axis.stop + _HOLE_RING))
+			for axis, size in zip(box, opaque.shape, strict=True)
+		)
+
+		hole = holes[near] == label
+		if hole.sum() < _HOLE_MIN_PIXELS:
+			continue
+
+		# The product immediately around this hole, and only around this hole.
+		ring = ndimage.binary_dilation(hole, iterations=_HOLE_RING) & ~hole & opaque[near]
+		if not ring.any():
+			continue
+
+		patch = pixels[near]
+		if float(np.linalg.norm(patch[hole].mean(axis=0) - patch[ring].mean(axis=0))) > _HOLE_MATCH:
+			continue
+
+		repaired[near][hole] = 255
+		filled = True
+
+	return Image.fromarray(repaired) if filled else alpha
+
+
+def _pull_in_edge(alpha):
+	"""The matte pulled in a little, so the rim of old background falls outside it.
+
+	Where the mask's edge lands, a pixel is part product and part whatever the
+	product was photographed on — and at the scale the model works at, "a pixel" of
+	mask is several of the photograph. Composite that rim onto the house grey and it
+	reads as an outline in the colour of the backdrop: a watch shot on an orange
+	table keeps a thin orange line all the way around its case.
+
+	Pulling the cut in by the width of that blend drops those pixels instead of
+	shipping them. It costs a sliver of genuine edge, which is the right trade —
+	nobody can see a missing half-millimetre of case, and everybody can see a halo.
+
+	It is NOT a fix for colour the photograph really contains. A polished case
+	standing next to an orange backdrop reflects it, and that reflection is metres
+	of real product surface rather than a rim of edge pixels. No matte can remove
+	it, and this does not try to.
+	"""
+	pull = round(_EDGE_PULL * max(alpha.size) / 1024.0)
+	if pull < 1:
+		return alpha
+
+	pulled = alpha
+	for _ in range(pull):
+		# Repeated 3x3 minimum: each pass retreats the edge by one pixel.
+		pulled = pulled.filter(ImageFilter.MinFilter(3))
+	# The erosion leaves the same hard staircase the flood does, and wants the same
+	# sub-pixel softening for the same reason.
+	return pulled.filter(ImageFilter.GaussianBlur(_EDGE_FEATHER))
 
 
 def _ground_complaint(image):

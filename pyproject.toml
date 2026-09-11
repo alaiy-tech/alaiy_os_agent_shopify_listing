@@ -23,6 +23,13 @@ dependencies = [
     # rembg downloads it to ~/.rembg on first use — see the README.
     "rembg~=2.0.84",
     "onnxruntime~=1.29",
+    # Repairing the mask rembg returns (image_style._repair): labelling the holes
+    # it punched through a product so the ones that are the product can be filled
+    # and the ones you can genuinely see through cannot. rembg pulls both in
+    # already — declared for the same reason Pillow is, because these are real
+    # imports of ours and should not rest on what a dependency happens to want.
+    "numpy>=2.3,<3",
+    "scipy>=1.16.3,<2",
 ]
 
 [build-system]
