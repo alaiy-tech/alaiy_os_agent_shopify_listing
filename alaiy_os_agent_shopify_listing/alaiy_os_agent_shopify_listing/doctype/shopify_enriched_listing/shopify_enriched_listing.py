@@ -52,8 +52,7 @@ class ShopifyEnrichedListing(Document):
 		listing_doc.listing_seo_title = self.seo_title
 		listing_doc.listing_seo_description = self.seo_description
 
-		self._sync_images(listing_doc)
-		self._sync_variant_images(listing_doc)
+		self.apply_images(listing_doc)
 		self._sync_attributes_as_metafields(listing_doc)
 
 		listing_doc.save(ignore_permissions=True)
@@ -94,6 +93,22 @@ class ShopifyEnrichedListing(Document):
 		item = frappe.get_doc("Item", self.item_code)
 		item.set("sh_shopify_tags", [{"shopify_tag": t} for t in usable])
 		item.save(ignore_permissions=True)
+
+	def apply_images(self, listing_doc):
+		"""Put this record's imagery onto the listing — both halves, together.
+
+		Public, and separate from _push_to_listing, because imagery can be
+		committed on its own: retouching photos does not make a listing's TEXT
+		reviewed, and a product whose photos were cleaned up should not have to
+		approve a content enrichment it never asked for to publish them (see
+		api.publish_listing_images). Approval calls exactly this, so the two
+		routes cannot drift into applying imagery differently.
+
+		Does not save — the caller owns the write, because approval has more to
+		put on the document first.
+		"""
+		self._sync_images(listing_doc)
+		self._sync_variant_images(listing_doc)
 
 	def _sync_images(self, listing_doc):
 		"""Map enriched listing images to Shopify listing images.

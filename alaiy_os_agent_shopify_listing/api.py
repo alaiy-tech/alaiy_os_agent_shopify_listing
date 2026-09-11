@@ -377,6 +377,61 @@ def _ensure_enriched_listing(item_code, listing, image_status="Queued"):
 	doc.insert(ignore_permissions=True)
 
 
+@frappe.whitelist(methods=["POST"])
+def publish_listing_images(item_code):
+	"""Commit this product's retouched photos to its live listing.
+
+	    POST {"item_code": "SH-123"} -> {item_code, published, images}
+
+	The imagery half of an approval, on its own. Retouched photos land on the
+	Shopify Enriched Listing and reach the product only when something applies
+	them, and until now the only thing that did was approving the whole
+	enrichment. That left a photo-only retouch with no way out at all: it is
+	written as a Draft (retouching a photo is not a listing anyone asked a human
+	to read), and the admin's Save only approves a draft that is Needs Review —
+	so the photo sat marked "pending approval" with nothing able to approve it.
+
+	This publishes the imagery and NOTHING else. No title, no description, no
+	attributes, and `is_enriched` is left alone: cleaning up a background does
+	not make a listing's copy reviewed, and a product should not have to accept
+	text it never asked for to get its photos.
+
+	It shares ShopifyEnrichedListing.apply_images with approval rather than
+	reimplementing the mapping, so the two routes cannot disagree about what a
+	row means. Approving afterwards stays safe — it applies the same rows again,
+	over themselves.
+
+	Idempotent, and refuses rather than pretends: a product with no enrichment
+	record, or one whose photos are all still rendering or failed, is told so.
+	"""
+	if not frappe.db.exists(ENRICHED_DOCTYPE, item_code):
+		frappe.throw("This product has no retouched photos to save.")
+
+	enriched = frappe.get_doc(ENRICHED_DOCTYPE, item_code)
+	enriched.check_permission("write")
+
+	produced = [row for row in (enriched.images or []) if row.url]
+	if not produced:
+		frappe.throw("None of this product's photos have finished rendering yet.")
+
+	listing = frappe.get_doc(base_listing_doctype(), item_code)
+	enriched.apply_images(listing)
+	listing.save(ignore_permissions=True)
+	frappe.db.commit()
+
+	return {
+		"item_code": item_code,
+		"published": len(produced),
+		"images": [row.url for row in produced],
+	}
+
+
+def base_listing_doctype():
+	from alaiy_os_agent_shopify_listing.tools import handlers as base
+
+	return base.LISTING_DOCTYPE
+
+
 @frappe.whitelist()
 def get_listing_images(item_code):
 	"""
@@ -384,7 +439,19 @@ def get_listing_images(item_code):
 	`enrich_listing_image`.
 
 	    {item_code, image_status, image_error, image_tokens,
-	     images: [{source_url, item_variant, url, note, kind}, ...]}
+	     images: [{source_url, item_variant, url, cutout_url, note, kind,
+	               pending}, ...]}
+
+	`pending` is the one to watch per photo: true while that photo is still
+	being rendered. A row that is mid-render and a row whose render failed both
+	have no url and both carry a note, so a caller cannot tell them apart from
+	`note` alone — and reading the in-flight note as a failure means giving up
+	on a photo seconds before it lands.
+
+	`cutout_url` is the retouched product clipped to a transparent background,
+	when the site's house style keeps one — the same picture as `url` without the
+	ground behind it, so a caller can put it on a different background without
+	paying to render the photo again. Null everywhere else.
 
 	**Watch the row, not the listing.** `image_status` is a property of the whole
 	listing, and photo-by-photo enrichment puts several jobs in flight at once: the
@@ -397,6 +464,10 @@ def get_listing_images(item_code):
 	enriched, rather than throwing — "nothing here yet" is a normal answer for a UI
 	asking about a product before anyone has enriched it.
 	"""
+	# Imported here, like everywhere else in this module: image_stage reaches
+	# back into bulk, which this module imports at the top.
+	from alaiy_os_agent_shopify_listing import image_stage
+
 	if not frappe.db.exists(ENRICHED_DOCTYPE, item_code):
 		return {
 			"item_code": item_code,
@@ -419,8 +490,13 @@ def get_listing_images(item_code):
 				"source_url": row.source_url,
 				"item_variant": row.item_variant,
 				"url": row.url,
+				"cutout_url": row.cutout_url,
 				"note": row.note,
 				"kind": row.kind,
+				# Whether this photo is still coming. Without it a caller has to
+				# infer that from `note`, and the in-flight note reads exactly
+				# like a failure note — see image_stage.is_pending.
+				"pending": image_stage.is_pending(row.url, row.note),
 			}
 			for row in (doc.images or [])
 		],

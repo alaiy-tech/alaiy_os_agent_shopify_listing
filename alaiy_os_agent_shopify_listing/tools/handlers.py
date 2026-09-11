@@ -863,6 +863,7 @@ def save_listing(listing, item_code=None):
 			"item_variant": img.get("item_variant"),
 			"source_url": img.get("source_url"),
 			"url": img.get("url"),
+			"cutout_url": img.get("cutout_url"),
 			"brief": img.get("brief"),
 			"note": img.get("note"),
 		})

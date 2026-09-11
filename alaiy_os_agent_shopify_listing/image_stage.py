@@ -55,7 +55,22 @@ _APPLY_BACKOFF = 0.5
 # seeded row already holds the original, and a row that has been enhanced before —
 # and a note that guesses wrong about which is which is worse than one that does not
 # mention it.
-_RERENDER_NOTE = "Being enhanced in the background; the image will appear here when ready."
+PENDING_NOTE = "Being enhanced in the background; the image will appear here when ready."
+
+
+def is_pending(url, note):
+	"""Whether this image row is still owed a result.
+
+	A row with no url is either mid-render or finished badly, and from outside
+	the two look identical: both have no url and both carry a note. Telling them
+	apart by reading the note is a caller's guess, and a caller that guesses
+	"failed" stops watching a photo that was about to arrive — which is exactly
+	what a poller did with the note above. So the question is answered here, in
+	the module that writes those notes, and callers ask instead of matching.
+	"""
+	if url:
+		return False
+	return not note or note == PENDING_NOTE
 
 
 def image_queue():
@@ -114,7 +129,7 @@ def queue_step(item_code, step, work, job_key=None):
 	)
 
 
-def clear_rendered(item_code, source_url, note=_RERENDER_NOTE):
+def clear_rendered(item_code, source_url, note=PENDING_NOTE):
 	"""Blank the result on every row for this photo, before deliberately redoing it.
 
 	`note` is what the row says about itself while it holds no result. It defaults
@@ -148,8 +163,10 @@ def clear_rendered(item_code, source_url, note=_RERENDER_NOTE):
 			name,
 			# `kind` goes too: a seeded row is marked "hero" so an untouched photo
 			# publishes as the original it is, and a row about to hold a retouched
-			# photo must not keep claiming that.
-			{"url": None, "kind": None, "note": note},
+			# photo must not keep claiming that. So does `cutout_url`: it is the
+			# clipped version of the result being discarded, and leaving it behind
+			# would pair the next render with the previous one's cutout.
+			{"url": None, "cutout_url": None, "kind": None, "note": note},
 			update_modified=False,
 		)
 
@@ -279,6 +296,12 @@ def _apply_once(item_code, rendered):
 			row.brief = image.get("brief") or row.brief
 			row.url = image.get("url")
 			row.note = image.get("note")
+			# Only when the entry speaks to it. Unlike `url`, which every entry
+			# carries, a cutout is produced by one step on one kind of job — a
+			# reconcile pass or a translated image says nothing about it, and
+			# assigning unconditionally would blank a good cutout on the way past.
+			if "cutout_url" in image:
+				row.cutout_url = image.get("cutout_url")
 		if image.get("url"):
 			produced += 1
 
