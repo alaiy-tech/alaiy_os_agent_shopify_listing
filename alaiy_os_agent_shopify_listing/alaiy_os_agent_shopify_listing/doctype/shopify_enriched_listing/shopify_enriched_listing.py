@@ -13,12 +13,29 @@ class ShopifyEnrichedListing(Document):
 	def on_update(self):
 		# on_update fires after the row is written, so the database already says
 		# "Approved" — the previous status must come from the pre-save snapshot.
-		# A brand-new doc has no snapshot; an agent never inserts as Approved, so
-		# only a real transition (anything -> Approved) pushes.
+		# A brand-new doc has no snapshot; an agent never inserts as Approved.
 		before = self.get_doc_before_save()
 		if self.status == "Approved":
 			if before and before.status != "Approved":
+				# The transition itself: content AND imagery, the whole approval.
 				self._push_to_listing()
+			elif before and self._content_changed(before):
+				# Already approved, and someone edited it anyway - the reviewer
+				# screen lets an admin correct an approved listing's title,
+				# description or attributes, and until this branch existed those
+				# corrections stopped at this record and never reached the
+				# product. Content only: imagery is REPLACED wholesale by
+				# _sync_images, so re-pushing it here would undo any photo work
+				# done on the listing since approval. Photos have their own
+				# commit (api.publish_listing_images).
+				#
+				# Only when the content actually moved. An approved record is
+				# saved for reasons that have nothing to say to the listing --
+				# image_stage writes rendered photos onto it row by row -- and
+				# pushing there would save the listing, re-sync the Item's tags
+				# and, on a synced listing, send Shopify a product it already
+				# has, once per render.
+				self._push_content_to_listing()
 		elif before is None or before.status == "Approved":
 			# The listing no longer carries approved content: either the agent
 			# re-ran (save_listing resets status to "Needs Review", and a fresh
@@ -44,22 +61,79 @@ class ShopifyEnrichedListing(Document):
 
 		listing_doc = frappe.get_doc("Shopify Product Listing", listing_name)
 
-		listing_doc.is_enriched = 1
-		listing_doc.listing_title = self.title
-		listing_doc.listing_description = self.description
-		listing_doc.listing_category = self.category
-		listing_doc.listing_product_type = self.product_type
-		listing_doc.listing_seo_title = self.seo_title
-		listing_doc.listing_seo_description = self.seo_description
-
+		self._apply_content(listing_doc)
 		self.apply_images(listing_doc)
-		self._sync_attributes_as_metafields(listing_doc)
 
 		listing_doc.save(ignore_permissions=True)
 
 		self._sync_tags()
 
 		frappe.db.commit()
+
+	def _content_changed(self, before):
+		"""Whether this save touched anything the listing publishes.
+
+		The attribute rows are compared as a dict rather than row by row: the
+		edit endpoint rebuilds the whole child table on every save, so every row
+		is "new" by name even when the values are identical.
+		"""
+		if any(self.get(field) != before.get(field) for field in self.CONTENT_FIELDS):
+			return True
+		if (self.shopify_tags or "") != (before.shopify_tags or ""):
+			return True
+		return {r.key: r.value for r in (self.attributes or [])} != {
+			r.key: r.value for r in (before.attributes or [])
+		}
+
+	def _push_content_to_listing(self):
+		"""Push this record's text and attributes to the listing, leaving its
+		imagery alone - an edit to an already-approved listing.
+
+		Same write as _push_to_listing minus apply_images, so a hand correction
+		reaches the product (and, if sync is enabled, Shopify) the moment it is
+		saved rather than waiting for an approval that has already happened.
+		"""
+		listing_name = self.item_code
+		if not frappe.db.exists("Shopify Product Listing", listing_name):
+			frappe.throw(f"Shopify Product Listing '{listing_name}' not found.")
+
+		listing_doc = frappe.get_doc("Shopify Product Listing", listing_name)
+
+		self._apply_content(listing_doc)
+
+		listing_doc.save(ignore_permissions=True)
+
+		self._sync_tags()
+
+		frappe.db.commit()
+
+	# Enriched field -> the Shopify Product Listing field it publishes into.
+	CONTENT_FIELDS = {
+		"title": "listing_title",
+		"description": "listing_description",
+		"category": "listing_category",
+		"product_type": "listing_product_type",
+		"seo_title": "listing_seo_title",
+		"seo_description": "listing_seo_description",
+	}
+
+	def _apply_content(self, listing_doc):
+		"""The non-image half of an approval: the listing's own text fields and
+		the attribute metafields. Does not save - the caller owns the write.
+
+		A field this record has nothing to say about (the run never produced
+		SEO, say) leaves the listing's own value alone rather than clearing it.
+		Publishing an empty title over a real one is never what either an
+		approval or a hand edit meant, and the same rule already governs the
+		attribute metafields below.
+		"""
+		listing_doc.is_enriched = 1
+		for field, listing_field in self.CONTENT_FIELDS.items():
+			value = self.get(field)
+			if (value or "").strip():
+				listing_doc.set(listing_field, value)
+
+		self._sync_attributes_as_metafields(listing_doc)
 
 	def _sync_tags(self):
 		"""Push the enriched tag list onto the Item's Shopify tag list.

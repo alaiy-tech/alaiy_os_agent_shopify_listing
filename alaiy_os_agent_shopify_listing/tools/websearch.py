@@ -19,8 +19,27 @@ from html.parser import HTMLParser
 import frappe
 
 from alaiy_os.engine import llm
+from alaiy_os.engine.context import get_agent_context
 
 from alaiy_os_agent_shopify_listing.tools.images import FETCH_HEADERS
+
+#: Where this run's web work accumulates, for the rest of the run to read.
+#:
+#: `save_listing` is the run's LAST action, so by the time provenance is worked
+#: out the searches and page fetches have already happened — but the run is
+#: still executing, which means its OS Agent Run transcript has not been
+#: written yet and the engine's own tool ledger is still in memory. Neither can
+#: be read back from the database mid-run.
+#:
+#: So the tools that reach the web record what they found here, on the request,
+#: and `provenance.py` reads it at the end of the same run. `frappe.flags` is
+#: cleared between jobs — but NOT between runs, which is the case that matters
+#: here: `bulk.py` deliberately executes a whole chunk of products inside one
+#: job, so without the run id below, product B could have a value "sourced" to
+#: a page fetched for product A, and every product's stored research would
+#: carry its predecessors' searches. A wrong URL is worse than no URL in a
+#: feature whose entire purpose is that a source can be trusted.
+_RESEARCH_FLAG = "_listing_research"
 
 #: A product spec page has no business being longer than this once boilerplate
 #: is stripped; truncating protects the turn budget from a page that is mostly
@@ -59,6 +78,28 @@ def _extract_text(html):
 	return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def research_record():
+	"""This run's web work so far: what was searched, and what was actually read.
+
+	`pages` holds the extracted text of every page the run really fetched, which
+	is what makes a sourced attribute checkable rather than merely claimed — a
+	value that appears in one of these was read off that page, and a URL that is
+	not here was not opened, whatever the model's notes say about it.
+
+	Scoped to the RUN, not the job. The record is stamped with the run that
+	opened it and thrown away the moment a different run asks for it, so a bulk
+	chunk cannot carry one product's pages into the next. Outside a run (a tool
+	called from a script or a test) the id is None, which behaves as a single
+	implicit run — fine, because nothing is being attributed.
+	"""
+	run = get_agent_context().get("run")
+	record = frappe.flags.get(_RESEARCH_FLAG)
+	if record is None or record.get("run") != run:
+		record = {"run": run, "searches": [], "pages": []}
+		frappe.flags[_RESEARCH_FLAG] = record
+	return record
+
+
 def search_competitor_listings(query):
 	"""
 	Web-search for `query` and return a grounded answer plus its sources.
@@ -82,11 +123,10 @@ def search_competitor_listings(query):
 		)
 
 	result = llm.web_search(query)
-	return {
-		"query": query,
-		"answer": result.get("answer") or "",
-		"citations": result.get("citations") or [],
-	}
+	answer = result.get("answer") or ""
+	citations = result.get("citations") or []
+	research_record()["searches"].append({"query": query, "citations": citations})
+	return {"query": query, "answer": answer, "citations": citations}
 
 
 def view_page(url):
@@ -103,6 +143,10 @@ def view_page(url):
 	resp.raise_for_status()
 
 	text = _extract_text(resp.text)[:MAX_PAGE_CHARS]
+	# Recorded only on success, and only after raise_for_status: a page that
+	# 404ed is a page the run did not read, and listing it here would let a
+	# value be "sourced" from a page that never loaded.
+	research_record()["pages"].append({"url": url, "text": text})
 	return {
 		"_content_blocks": [
 			{"type": "text", "text": f"Page content ({url}):\n{text}"},

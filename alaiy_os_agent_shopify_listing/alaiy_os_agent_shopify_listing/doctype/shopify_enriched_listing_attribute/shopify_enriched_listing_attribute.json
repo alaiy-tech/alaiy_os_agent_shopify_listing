@@ -7,7 +7,9 @@
  "engine": "InnoDB",
  "field_order": [
   "key",
-  "value"
+  "value",
+  "source",
+  "source_url"
  ],
  "fields": [
   {
@@ -21,11 +23,26 @@
   },
   {
    "columns": 7,
-   "description": "Plain text. Edited here before approval, this is what is published — the JSON below the table is the agent's original, kept for audit.",
+   "description": "Plain text. Edited here before approval, this is what is published \u2014 the JSON below the table is the agent's original, kept for audit.",
    "fieldname": "value",
    "fieldtype": "Long Text",
    "in_list_view": 1,
    "label": "Value"
+  },
+  {
+   "description": "Which rung of the evidence ladder this value came from. Worked out from the evidence, not from what the agent said about it \u2014 see provenance.py.",
+   "fieldname": "source",
+   "fieldtype": "Select",
+   "label": "Source",
+   "options": "\npublished\nmetafield\nweb\nproduct\nrevised",
+   "read_only": 1
+  },
+  {
+   "description": "The specific evidence: the store metafield it was read from, or the URL of the page it was read off.",
+   "fieldname": "source_url",
+   "fieldtype": "Small Text",
+   "label": "Source Detail",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
