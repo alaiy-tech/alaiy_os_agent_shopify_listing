@@ -19,7 +19,7 @@ class ShopifyEnrichedListing(Document):
 			if before and before.status != "Approved":
 				# The transition itself: content AND imagery, the whole approval.
 				self._push_to_listing()
-			elif before:
+			elif before and self._content_changed(before):
 				# Already approved, and someone edited it anyway - the reviewer
 				# screen lets an admin correct an approved listing's title,
 				# description or attributes, and until this branch existed those
@@ -28,6 +28,13 @@ class ShopifyEnrichedListing(Document):
 				# _sync_images, so re-pushing it here would undo any photo work
 				# done on the listing since approval. Photos have their own
 				# commit (api.publish_listing_images).
+				#
+				# Only when the content actually moved. An approved record is
+				# saved for reasons that have nothing to say to the listing --
+				# image_stage writes rendered photos onto it row by row -- and
+				# pushing there would save the listing, re-sync the Item's tags
+				# and, on a synced listing, send Shopify a product it already
+				# has, once per render.
 				self._push_content_to_listing()
 		elif before is None or before.status == "Approved":
 			# The listing no longer carries approved content: either the agent
@@ -62,6 +69,21 @@ class ShopifyEnrichedListing(Document):
 		self._sync_tags()
 
 		frappe.db.commit()
+
+	def _content_changed(self, before):
+		"""Whether this save touched anything the listing publishes.
+
+		The attribute rows are compared as a dict rather than row by row: the
+		edit endpoint rebuilds the whole child table on every save, so every row
+		is "new" by name even when the values are identical.
+		"""
+		if any(self.get(field) != before.get(field) for field in self.CONTENT_FIELDS):
+			return True
+		if (self.shopify_tags or "") != (before.shopify_tags or ""):
+			return True
+		return {r.key: r.value for r in (self.attributes or [])} != {
+			r.key: r.value for r in (before.attributes or [])
+		}
 
 	def _push_content_to_listing(self):
 		"""Push this record's text and attributes to the listing, leaving its
