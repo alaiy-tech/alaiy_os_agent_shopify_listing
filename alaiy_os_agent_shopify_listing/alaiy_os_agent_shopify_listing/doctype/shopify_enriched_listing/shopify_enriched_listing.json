@@ -36,6 +36,7 @@
   "raw_section",
   "attributes_json",
   "variants_json",
+  "research_json",
   "output_json"
  ],
  "fields": [
@@ -110,13 +111,13 @@
    "label": "SEO & Tags"
   },
   {
-   "description": "Mirrors the listing's `listing_seo_title` — the search-result snippet title, distinct from Title above.",
+   "description": "Mirrors the listing's `listing_seo_title` \u2014 the search-result snippet title, distinct from Title above.",
    "fieldname": "seo_title",
    "fieldtype": "Data",
    "label": "SEO Title"
   },
   {
-   "description": "Mirrors the listing's `listing_seo_description` — the search-result snippet description, capped at 320 characters.",
+   "description": "Mirrors the listing's `listing_seo_description` \u2014 the search-result snippet description, capped at 320 characters.",
    "fieldname": "seo_description",
    "fieldtype": "Small Text",
    "label": "SEO Description"
@@ -141,7 +142,7 @@
    "options": "Shopify Enriched Listing Attribute"
   },
   {
-   "description": "The attributes exactly as the agent returned them, kept for audit. The Attributes table is what gets published — editing this changes nothing.",
+   "description": "The attributes exactly as the agent returned them, kept for audit. The Attributes table is what gets published \u2014 editing this changes nothing.",
    "fieldname": "attributes_json",
    "fieldtype": "Code",
    "label": "Attributes (JSON)",
@@ -200,7 +201,7 @@
    "label": "Variants"
   },
   {
-   "description": "What the agent observed per variant — option values read from its own photo and text, and suggestions where they disagree with the catalog. Review material only: nothing here is pushed on approval, and the agent never renames a variant. Variant images live in the Images table above, tagged with their variant.",
+   "description": "What the agent observed per variant \u2014 option values read from its own photo and text, and suggestions where they disagree with the catalog. Review material only: nothing here is pushed on approval, and the agent never renames a variant. Variant images live in the Images table above, tagged with their variant.",
    "fieldname": "variants",
    "fieldtype": "Table",
    "label": "Variants",
@@ -233,6 +234,14 @@
    "fieldname": "variants_json",
    "fieldtype": "Code",
    "label": "Variants (JSON)",
+   "options": "JSON",
+   "read_only": 1
+  },
+  {
+   "description": "What this run searched for and which pages it actually read. Recorded by the tools as they ran, so it is what happened rather than what the agent reports having done.",
+   "fieldname": "research_json",
+   "fieldtype": "Code",
+   "label": "Research (JSON)",
    "options": "JSON",
    "read_only": 1
   },

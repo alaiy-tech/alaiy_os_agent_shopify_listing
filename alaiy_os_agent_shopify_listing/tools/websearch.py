@@ -22,6 +22,20 @@ from alaiy_os.engine import llm
 
 from alaiy_os_agent_shopify_listing.tools.images import FETCH_HEADERS
 
+#: Where this run's web work accumulates, for the rest of the run to read.
+#:
+#: `save_listing` is the run's LAST action, so by the time provenance is worked
+#: out the searches and page fetches have already happened — but the run is
+#: still executing, which means its OS Agent Run transcript has not been
+#: written yet and the engine's own tool ledger is still in memory. Neither can
+#: be read back from the database mid-run.
+#:
+#: So the tools that reach the web record what they found here, on the request,
+#: and `provenance.py` reads it at the end of the same run. `frappe.flags` is
+#: cleared between jobs, so one product's research cannot leak into the next
+#: even in a long-lived worker — the same property `product_history` relies on.
+_RESEARCH_FLAG = "_listing_research"
+
 #: A product spec page has no business being longer than this once boilerplate
 #: is stripped; truncating protects the turn budget from a page that is mostly
 #: navigation, scripts, or an unrelated wall of related-products markup.
@@ -59,6 +73,17 @@ def _extract_text(html):
 	return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def research_record():
+	"""This run's web work so far: what was searched, and what was actually read.
+
+	`pages` holds the extracted text of every page the run really fetched, which
+	is what makes a sourced attribute checkable rather than merely claimed — a
+	value that appears in one of these was read off that page, and a URL that is
+	not here was not opened, whatever the model's notes say about it.
+	"""
+	return frappe.flags.setdefault(_RESEARCH_FLAG, {"searches": [], "pages": []})
+
+
 def search_competitor_listings(query):
 	"""
 	Web-search for `query` and return a grounded answer plus its sources.
@@ -82,11 +107,10 @@ def search_competitor_listings(query):
 		)
 
 	result = llm.web_search(query)
-	return {
-		"query": query,
-		"answer": result.get("answer") or "",
-		"citations": result.get("citations") or [],
-	}
+	answer = result.get("answer") or ""
+	citations = result.get("citations") or []
+	research_record()["searches"].append({"query": query, "citations": citations})
+	return {"query": query, "answer": answer, "citations": citations}
 
 
 def view_page(url):
@@ -103,6 +127,10 @@ def view_page(url):
 	resp.raise_for_status()
 
 	text = _extract_text(resp.text)[:MAX_PAGE_CHARS]
+	# Recorded only on success, and only after raise_for_status: a page that
+	# 404ed is a page the run did not read, and listing it here would let a
+	# value be "sourced" from a page that never loaded.
+	research_record()["pages"].append({"url": url, "text": text})
 	return {
 		"_content_blocks": [
 			{"type": "text", "text": f"Page content ({url}):\n{text}"},

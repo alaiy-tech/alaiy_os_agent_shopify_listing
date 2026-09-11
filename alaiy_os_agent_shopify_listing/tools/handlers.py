@@ -34,7 +34,7 @@ import re
 
 import frappe
 
-from alaiy_os_agent_shopify_listing import matrix
+from alaiy_os_agent_shopify_listing import matrix, provenance
 from alaiy_os_agent_shopify_listing.tools import images
 
 # Cap how many photos we send to the model to keep token/latency cost bounded.
@@ -699,7 +699,14 @@ def save_listing(listing, item_code=None):
 	# What the product already publishes. Read once and used three times below —
 	# an attribute the store answers is not a placeholder to report, not a gap to
 	# flag, and not a chore for the reviewer.
-	published = published_attributes(get_listing(item_code))
+	listing_doc = get_listing(item_code)
+	published = published_attributes(listing_doc)
+	# The same records `get_product` showed the model as `other_metafields`.
+	# Read here too, because an attribute whose value matches one of them came
+	# from the store rather than from the run's own work, and the reviewer
+	# cannot tell those apart by looking at the value. See provenance.py.
+	metafields = provenance.other_metafields(listing_metafields(listing_doc), ATTRIBUTE_NAMESPACE)
+	pages_read = provenance.pages_read()
 
 	if frappe.db.exists(ENRICHED_DOCTYPE, item_code):
 		doc = frappe.get_doc(ENRICHED_DOCTYPE, item_code)
@@ -748,6 +755,7 @@ def save_listing(listing, item_code=None):
 	doc.attributes_json = frappe.as_json(listing.get("attributes") or {})
 	doc.variants_json = frappe.as_json(listing.get("variants") or [])
 	doc.output_json = frappe.as_json(listing)
+
 
 	# The same two things again, as child tables — a reviewer reads and edits rows,
 	# not a JSON blob, exactly as they do on the Shopify Product Listing itself. The
@@ -835,7 +843,8 @@ def save_listing(listing, item_code=None):
 			# fills the reviewer's queue with work that is already done.
 			text = resolved
 
-		doc.append("attributes", {"key": key, "value": text})
+		source, detail = provenance.of_attribute(key, text, published, metafields, pages_read)
+		doc.append("attributes", {"key": key, "value": text, "source": source, "source_url": detail})
 
 	doc.set("variants", [])
 	for variant in (listing.get("variants") or []):
@@ -883,6 +892,31 @@ def save_listing(listing, item_code=None):
 	doc.image_error = None
 
 	_flag_missing_mandatory(doc, published)
+
+	# What the run searched for and which pages it actually opened, recorded by
+	# the tools themselves as they ran. Stored whether or not anything was
+	# looked up: an empty record is the answer to "did it search?" just as much
+	# as a full one, and the reviewer of a thin listing wants to know which.
+	research = provenance.research(doc.notes)
+	doc.research_json = frappe.as_json(research)
+	if research["unsourced_claims"]:
+		# A URL in the agent's notes that no fetch ever went to. The value it is
+		# offered as evidence for may be perfectly correct — but it was not read
+		# off that page, and a citation is the one thing a reviewer is entitled
+		# to take at face value. Named here so it cannot pass as sourced.
+		#
+		# Flagged LAST, after the completeness pass: every check above reads
+		# needs_review back through matrix.match_keys to see which attributes
+		# the agent already spoke for, and a URL like `.../leather-strap-watch`
+		# in an earlier line would read as the agent having flagged Strap and
+		# silently cost that attribute its auto-append.
+		shown = ", ".join(research["unsourced_claims"][:3])
+		more = len(research["unsourced_claims"]) - 3
+		_flag(doc, (
+			f"Cited sources the run never opened ({shown}"
+			f"{f', and {more} more' if more > 0 else ''}) — check any value "
+			"these were given as evidence for"
+		))
 
 	try:
 		doc.save(ignore_permissions=True)
