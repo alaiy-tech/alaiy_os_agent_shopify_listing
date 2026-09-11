@@ -50,8 +50,10 @@ WEB = "web"
 PRODUCT = "product"
 REVISED = "revised"
 
-#: How each rung reads to a reviewer. The Desk select and the portal both use
-#: these, so the vocabulary is defined once.
+#: How each rung reads to a reviewer. The portal renders its own copy of these
+#: (SOURCE_LABEL in AdminProductDetail.tsx) — kept here so the canonical
+#: wording lives beside the code that decides the rung, and the two can be
+#: checked against each other.
 LABELS = {
 	PUBLISHED: "Already published",
 	METAFIELD: "Store record",
@@ -181,27 +183,3 @@ def other_metafields(listing_metafields, attribute_namespace):
 		for namespace, values in (listing_metafields or {}).items()
 		if namespace != attribute_namespace
 	}
-
-
-def summarise(rows):
-	"""One line per rung — "4 already published, 2 from the web" — for a caller
-	that wants the shape of a run's evidence without reading every row."""
-	counts = {}
-	for row in rows or []:
-		source = row.get("source")
-		if source:
-			counts[source] = counts.get(source, 0) + 1
-	return counts
-
-
-def label(source):
-	return LABELS.get(source, source or "")
-
-
-def source_options():
-	"""The Select field's options, newline-joined as Frappe wants them."""
-	return "\n".join(("",) + tuple(LABELS))
-
-
-def log_failure(item_code):
-	frappe.log_error(title=f"Listing provenance: could not work it out for {item_code}")

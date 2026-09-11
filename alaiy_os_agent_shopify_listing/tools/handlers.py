@@ -705,8 +705,17 @@ def save_listing(listing, item_code=None):
 	# Read here too, because an attribute whose value matches one of them came
 	# from the store rather than from the run's own work, and the reviewer
 	# cannot tell those apart by looking at the value. See provenance.py.
-	metafields = provenance.other_metafields(listing_metafields(listing_doc), ATTRIBUTE_NAMESPACE)
-	pages_read = provenance.pages_read()
+	# Wrapped, like everything else in this function: save_listing's rule is
+	# that nothing can fail the save, because a refused call makes the model
+	# rebuild the payload and a rebuilt payload silently drops attributes it
+	# had already got right. Provenance is an annotation on a good answer — it
+	# is never worth losing the answer for.
+	try:
+		metafields = provenance.other_metafields(listing_metafields(listing_doc), ATTRIBUTE_NAMESPACE)
+		pages_read = provenance.pages_read()
+	except Exception:
+		frappe.log_error(title=f"Listing provenance: could not read the evidence for {item_code}")
+		metafields, pages_read = {}, []
 
 	if frappe.db.exists(ENRICHED_DOCTYPE, item_code):
 		doc = frappe.get_doc(ENRICHED_DOCTYPE, item_code)
@@ -843,7 +852,12 @@ def save_listing(listing, item_code=None):
 			# fills the reviewer's queue with work that is already done.
 			text = resolved
 
-		source, detail = provenance.of_attribute(key, text, published, metafields, pages_read)
+		try:
+			source, detail = provenance.of_attribute(key, text, published, metafields, pages_read)
+		except Exception:
+			# An unlabelled row, not a lost one. The value is the thing the
+			# reviewer acts on; where it came from is how they weigh it.
+			source, detail = None, None
 		doc.append("attributes", {"key": key, "value": text, "source": source, "source_url": detail})
 
 	doc.set("variants", [])
@@ -897,7 +911,11 @@ def save_listing(listing, item_code=None):
 	# the tools themselves as they ran. Stored whether or not anything was
 	# looked up: an empty record is the answer to "did it search?" just as much
 	# as a full one, and the reviewer of a thin listing wants to know which.
-	research = provenance.research(doc.notes)
+	try:
+		research = provenance.research(doc.notes)
+	except Exception:
+		frappe.log_error(title=f"Listing provenance: could not record the research for {item_code}")
+		research = {"searches": [], "pages": [], "unsourced_claims": []}
 	doc.research_json = frappe.as_json(research)
 	if research["unsourced_claims"]:
 		# A URL in the agent's notes that no fetch ever went to. The value it is

@@ -19,6 +19,7 @@ from html.parser import HTMLParser
 import frappe
 
 from alaiy_os.engine import llm
+from alaiy_os.engine.context import get_agent_context
 
 from alaiy_os_agent_shopify_listing.tools.images import FETCH_HEADERS
 
@@ -32,8 +33,12 @@ from alaiy_os_agent_shopify_listing.tools.images import FETCH_HEADERS
 #:
 #: So the tools that reach the web record what they found here, on the request,
 #: and `provenance.py` reads it at the end of the same run. `frappe.flags` is
-#: cleared between jobs, so one product's research cannot leak into the next
-#: even in a long-lived worker — the same property `product_history` relies on.
+#: cleared between jobs — but NOT between runs, which is the case that matters
+#: here: `bulk.py` deliberately executes a whole chunk of products inside one
+#: job, so without the run id below, product B could have a value "sourced" to
+#: a page fetched for product A, and every product's stored research would
+#: carry its predecessors' searches. A wrong URL is worse than no URL in a
+#: feature whose entire purpose is that a source can be trusted.
 _RESEARCH_FLAG = "_listing_research"
 
 #: A product spec page has no business being longer than this once boilerplate
@@ -80,8 +85,19 @@ def research_record():
 	is what makes a sourced attribute checkable rather than merely claimed — a
 	value that appears in one of these was read off that page, and a URL that is
 	not here was not opened, whatever the model's notes say about it.
+
+	Scoped to the RUN, not the job. The record is stamped with the run that
+	opened it and thrown away the moment a different run asks for it, so a bulk
+	chunk cannot carry one product's pages into the next. Outside a run (a tool
+	called from a script or a test) the id is None, which behaves as a single
+	implicit run — fine, because nothing is being attributed.
 	"""
-	return frappe.flags.setdefault(_RESEARCH_FLAG, {"searches": [], "pages": []})
+	run = get_agent_context().get("run")
+	record = frappe.flags.get(_RESEARCH_FLAG)
+	if record is None or record.get("run") != run:
+		record = {"run": run, "searches": [], "pages": []}
+		frappe.flags[_RESEARCH_FLAG] = record
+	return record
 
 
 def search_competitor_listings(query):
