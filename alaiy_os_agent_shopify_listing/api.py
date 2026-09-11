@@ -398,11 +398,19 @@ def publish_listing_images(item_code):
 
 	It shares ShopifyEnrichedListing.apply_images with approval rather than
 	reimplementing the mapping, so the two routes cannot disagree about what a
-	row means. Approving afterwards stays safe — it applies the same rows again,
-	over themselves.
+	row means. Approving afterwards stays safe — with nothing left in `images`
+	to apply, _sync_images leaves the listing's (already-published) photos
+	alone rather than replacing them with nothing.
 
-	Idempotent, and refuses rather than pretends: a product with no enrichment
-	record, or one whose photos are all still rendering or failed, is told so.
+	Refuses rather than pretends: a product with no enrichment record, or one
+	whose photos are all still rendering or failed, is told so.
+
+	Clears `images` off the draft once applied, rather than leaving the same
+	rows sitting there "produced" forever - get_listing_images (the poll this
+	reads on to show a photo as retouched-but-unsaved) has no other way to
+	know a row it already returned has since reached the product, so leaving
+	it in place made an already-saved photo look pending again on every
+	reload for as long as this draft exists.
 	"""
 	if not frappe.db.exists(ENRICHED_DOCTYPE, item_code):
 		frappe.throw("This product has no retouched photos to save.")
@@ -417,6 +425,8 @@ def publish_listing_images(item_code):
 	listing = frappe.get_doc(base_listing_doctype(), item_code)
 	enriched.apply_images(listing)
 	listing.save(ignore_permissions=True)
+	enriched.set("images", [])
+	enriched.save(ignore_permissions=True)
 	frappe.db.commit()
 
 	return {
